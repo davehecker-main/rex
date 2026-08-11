@@ -44,7 +44,10 @@ if is_resume and os.environ.get("FAKE_CODEX_MISSING") == "1":
     marker = Path(os.environ["FAKE_CODEX_MISSING_MARKER"])
     if not marker.exists():
         marker.write_text("failed once", encoding="utf-8")
-        print("Session not found for thread_id: " + session_id, file=sys.stderr)
+        template = os.environ.get(
+            "FAKE_CODEX_MISSING_MESSAGE", "Session not found for thread_id: {id}"
+        )
+        print(template.format(id=session_id), file=sys.stderr)
         raise SystemExit(1)
 
 output_path.write_text("rex response\n", encoding="utf-8")
@@ -119,6 +122,42 @@ class RexCliTests(unittest.TestCase):
         self.assertIn("resume", calls[0]["args"])
         self.assertNotIn("resume", calls[1]["args"])
         self.assertIn("one-time bootstrap", calls[1]["prompt"])
+
+    def test_pruned_rollout_is_recovered_like_a_missing_session(self):
+        """The phrasing `codex exec resume` actually uses for a pruned rollout."""
+        self.state_dir.mkdir()
+        rex_cli.write_session_id(
+            self.state_dir, "33333333-3333-3333-3333-333333333333"
+        )
+        os.environ["FAKE_CODEX_MISSING"] = "1"
+        os.environ["FAKE_CODEX_MISSING_MARKER"] = str(self.root / "pruned")
+        os.environ["FAKE_CODEX_MISSING_MESSAGE"] = (
+            "thread/resume: thread/resume failed: no rollout found for "
+            "thread id {id} (code -32600)"
+        )
+        self.assertEqual(self.invoke("recover"), "rex response")
+        calls = self.calls()
+        self.assertEqual(len(calls), 2)
+        self.assertIn("resume", calls[0]["args"])
+        self.assertNotIn("resume", calls[1]["args"])
+        self.assertIn("one-time bootstrap", calls[1]["prompt"])
+
+    def test_unrelated_resume_failure_keeps_the_session(self):
+        """A transient failure must not throw away Rex's continuity."""
+        self.state_dir.mkdir()
+        rex_cli.write_session_id(
+            self.state_dir, "44444444-4444-4444-4444-444444444444"
+        )
+        os.environ["FAKE_CODEX_MISSING"] = "1"
+        os.environ["FAKE_CODEX_MISSING_MARKER"] = str(self.root / "transient")
+        os.environ["FAKE_CODEX_MISSING_MESSAGE"] = "stream error: connection reset"
+        with self.assertRaises(rex_cli.RexError):
+            self.invoke("transient")
+        self.assertEqual(len(self.calls()), 1)
+        self.assertEqual(
+            rex_cli.read_session_id(self.state_dir),
+            "44444444-4444-4444-4444-444444444444",
+        )
 
     def test_corrupt_state_fails_closed(self):
         self.state_dir.mkdir()

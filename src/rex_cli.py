@@ -16,11 +16,27 @@ from typing import TextIO
 
 
 STATE_VERSION = 1
-SESSION_NOT_FOUND = "session not found"
+
+# Codex has more than one way of saying "the session you asked me to resume is
+# gone". Matching only the first of them left a dead pointer unrecoverable:
+# `codex exec resume` answers a pruned rollout with "no rollout found for thread
+# id <id> (code -32600)", which contains none of the words in "session not found".
+UNRESUMABLE_SESSION_MARKERS = (
+    "session not found",
+    "no rollout found",
+    "thread not found",
+    "conversation not found",
+)
 
 
 class RexError(RuntimeError):
     """An expected Rex invocation failure."""
+
+
+def is_unresumable_session(error_text: str) -> bool:
+    """True when Codex is reporting that the stored session no longer exists."""
+    lowered = error_text.lower()
+    return any(marker in lowered for marker in UNRESUMABLE_SESSION_MARKERS)
 
 
 def default_repo_root() -> Path:
@@ -203,7 +219,7 @@ def ask(
                 request, session_id, state_dir, repo_root, codex_binary
             )
         except RexError as error:
-            if session_id and SESSION_NOT_FOUND in str(error).lower():
+            if session_id and is_unresumable_session(str(error)):
                 clear_session_id(state_dir)
                 resolved_id, response = invoke_codex(
                     bootstrap_prompt(repo_root, prompt),
