@@ -17,25 +17,37 @@ from typing import TextIO
 
 STATE_VERSION = 1
 
-# Codex has more than one way of saying "the session you asked me to resume is
-# gone". Matching only the first of them left a dead pointer unrecoverable:
-# `codex exec resume` answers a pruned rollout with "no rollout found for thread
-# id <id> (code -32600)", which contains none of the words in "session not found".
+# The two phrasings `codex exec resume` has actually been observed producing for a
+# session it cannot resume. Both are measured, not guessed: "session not found for
+# thread_id", and "no rollout found for thread id <id> (code -32600)" once the
+# rollout has been pruned.
+#
+# Deliberately not a wider list. A false positive here is worse than the bug this
+# recovers from: it discards a live session and silently hands the caller a Rex with
+# no memory. A phrase only plausibly emitted is not evidence, so it does not belong.
 UNRESUMABLE_SESSION_MARKERS = (
     "session not found",
     "no rollout found",
-    "thread not found",
-    "conversation not found",
 )
 
 
 class RexError(RuntimeError):
     """An expected Rex invocation failure."""
 
+    def __init__(self, message: str, *, stderr: str = "") -> None:
+        super().__init__(message)
+        self.stderr = stderr
 
-def is_unresumable_session(error_text: str) -> bool:
-    """True when Codex is reporting that the stored session no longer exists."""
-    lowered = error_text.lower()
+
+def is_unresumable_session(error: BaseException) -> bool:
+    """True when Codex's diagnostics say the stored session no longer exists.
+
+    Reads Codex's stderr alone. The combined stderr+stdout blob carried in the
+    exception message also holds `--json` event output, which is model-influenced
+    text: a marker appearing inside a Rex response would otherwise be read as a
+    transport diagnostic and cost a live session.
+    """
+    lowered = getattr(error, "stderr", "").lower()
     return any(marker in lowered for marker in UNRESUMABLE_SESSION_MARKERS)
 
 
@@ -191,7 +203,10 @@ def invoke_codex(
             detail = "\n".join(
                 part for part in (result.stderr.strip(), result.stdout.strip()) if part
             )
-            raise RexError(detail or f"Codex exited with status {result.returncode}")
+            raise RexError(
+                detail or f"Codex exited with status {result.returncode}",
+                stderr=result.stderr,
+            )
         response = output_path.read_text(encoding="utf-8").strip()
         if not response:
             raise RexError("Codex completed without a final Rex response")
@@ -219,7 +234,7 @@ def ask(
                 request, session_id, state_dir, repo_root, codex_binary
             )
         except RexError as error:
-            if session_id and is_unresumable_session(str(error)):
+            if session_id and is_unresumable_session(error):
                 clear_session_id(state_dir)
                 resolved_id, response = invoke_codex(
                     bootstrap_prompt(repo_root, prompt),
