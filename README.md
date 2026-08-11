@@ -16,6 +16,7 @@ consistently instead of being re-derived in every session.
 | `docs/constitution.md` | The principles that do not change session to session, and what each one forbids |
 | `docs/operating-model.md` | How work actually runs: the unit of work, the human/agent split, what "done" means |
 | `docs/architecture.md` | How clients reach one persistent, on-demand Rex agent |
+| `docs/workflow.md` | Mandatory checkout, check-in, staging, and release rules |
 
 Read the charter for *why Rex exists*, the constitution for *what Rex will not do*,
 and the operating model for *how a change gets made*.
@@ -38,12 +39,15 @@ docs/architecture.md        persistent Rex architecture
 docs/charter.md             mission and scope
 docs/constitution.md        fixed principles
 docs/operating-model.md     how work runs
+docs/workflow.md            Git and GitHub workflow
+AGENTS.md                   instructions loaded by coding agents
+bin/rex-workflow            guarded checkout/check-in command
 ```
 
 ## Status
 
-Sprint 0. The foundation documents exist; nothing is automated yet. What Rex
-deliberately has not decided is listed at the end of `docs/operating-model.md`.
+Sprint 0. The foundation and persistent-agent implementation exist. Rex's Git and
+GitHub workflow is automated where the repository's GitHub plan permits.
 
 ## Persistent Rex
 

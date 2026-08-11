@@ -3,6 +3,9 @@
 The charter says why Rex exists. The constitution says what Rex will not do. This
 document says how a change actually gets made.
 
+`docs/workflow.md` owns the mandatory Git and GitHub procedure. If this overview and
+that procedure differ, the workflow document wins.
+
 It describes the workflow as it runs today, with one engineer and Claude Code. It is
 short on purpose: anything written here is something that has to hold every time.
 
@@ -48,8 +51,9 @@ rather than an aspiration.
 **The engineer** sets scope, decides tradeoffs, and merges. Approving a change is a
 real act of judgment, not a formality performed on work already treated as finished.
 
-**Claude Code** executes inside the stated scope: writes the change, verifies it, and
-reports what happened — including what failed, what was skipped, and what is uncertain.
+**Coding agents, including Rex, Codex, and Claude Code,** execute inside the stated
+scope: write the change, verify it, and report what happened — including what failed,
+what was skipped, and what is uncertain.
 It surfaces decisions rather than absorbing them, and it does not merge its own work.
 
 A clean result reported without its caveats is worse than a messy one reported
@@ -100,7 +104,6 @@ Sprint 0 establishes the foundation and stops there. The following are genuinely
 and are listed so they are recognized as unanswered rather than quietly invented the
 first time they come up:
 
-- What automation, if any, runs against this repository.
 - How Rex's rules get applied to a project that is not Rex.
 - How to tell whether Rex is working — what gets measured, and how often it is reviewed.
 
