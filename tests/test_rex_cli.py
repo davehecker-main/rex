@@ -47,7 +47,8 @@ if is_resume and os.environ.get("FAKE_CODEX_MISSING") == "1":
         template = os.environ.get(
             "FAKE_CODEX_MISSING_MESSAGE", "Session not found for thread_id: {id}"
         )
-        print(template.format(id=session_id), file=sys.stderr)
+        stream = sys.stdout if os.environ.get("FAKE_CODEX_MISSING_ON_STDOUT") == "1" else sys.stderr
+        print(template.format(id=session_id), file=stream)
         raise SystemExit(1)
 
 output_path.write_text("rex response\n", encoding="utf-8")
@@ -141,6 +142,31 @@ class RexCliTests(unittest.TestCase):
         self.assertIn("resume", calls[0]["args"])
         self.assertNotIn("resume", calls[1]["args"])
         self.assertIn("one-time bootstrap", calls[1]["prompt"])
+
+    def test_marker_in_codex_output_does_not_discard_the_session(self):
+        """Rex's own words are not transport diagnostics.
+
+        `--json` event output is model-influenced. A resume that fails for an
+        unrelated reason while a marker phrase sits in stdout must not be read as
+        "the session is gone" - that would cost a live session.
+        """
+        self.state_dir.mkdir()
+        rex_cli.write_session_id(
+            self.state_dir, "55555555-5555-5555-5555-555555555555"
+        )
+        os.environ["FAKE_CODEX_MISSING"] = "1"
+        os.environ["FAKE_CODEX_MISSING_MARKER"] = str(self.root / "stdout-marker")
+        os.environ["FAKE_CODEX_MISSING_ON_STDOUT"] = "1"
+        os.environ["FAKE_CODEX_MISSING_MESSAGE"] = (
+            "the user asked what happens when a session not found error appears"
+        )
+        with self.assertRaises(rex_cli.RexError):
+            self.invoke("quoting a marker")
+        self.assertEqual(len(self.calls()), 1)
+        self.assertEqual(
+            rex_cli.read_session_id(self.state_dir),
+            "55555555-5555-5555-5555-555555555555",
+        )
 
     def test_unrelated_resume_failure_keeps_the_session(self):
         """A transient failure must not throw away Rex's continuity."""
