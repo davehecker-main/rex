@@ -10,9 +10,6 @@ import sys
 from pathlib import Path
 
 PROTECTED_BRANCHES = {"main", "staging"}
-ISSUE_PATTERN = re.compile(
-    r"https://github\.com/ShareViewLLC/ShareView/issues/(?P<number>\d+)"
-)
 
 
 class WorkflowError(RuntimeError):
@@ -54,12 +51,10 @@ def checkout(branch: str, destination: Path | None, cwd: Path) -> None:
     print(target)
 
 
-def pr_body(issue: int, verification: str) -> str:
+def pr_body(verification: str) -> str:
     return f"""## What changed
 
 See the commit diff for this scoped Rex change.
-
-Closes https://github.com/ShareViewLLC/ShareView/issues/{issue}
 
 ## How it was verified
 
@@ -71,10 +66,8 @@ None identified.
 """
 
 
-def checkin(issue: int, message: str, verification: str, paths: list[str], cwd: Path) -> None:
+def checkin(message: str, verification: str, paths: list[str], cwd: Path) -> None:
     branch = require_feature_branch(cwd)
-    if issue < 1:
-        raise WorkflowError("ShareView issue number must be positive")
     if not paths:
         raise WorkflowError("Check-in requires explicit file paths")
     if not verification.strip():
@@ -92,7 +85,7 @@ def checkin(issue: int, message: str, verification: str, paths: list[str], cwd: 
     run("git", "push", "-u", "origin", branch, cwd=cwd)
     run(
         "gh", "pr", "create", "--draft", "--base", "staging", "--head", branch,
-        "--title", message, "--body", pr_body(issue, verification), cwd=cwd,
+        "--title", message, "--body", pr_body(verification), cwd=cwd,
     )
 
 
@@ -105,8 +98,6 @@ def validate_pr(base: str, head: str, body: str) -> None:
         raise WorkflowError("Rex pull requests must target staging or main")
     if head in PROTECTED_BRANCHES:
         raise WorkflowError("A staging PR must come from a feature branch")
-    if not ISSUE_PATTERN.search(body):
-        raise WorkflowError("A staging PR must link a ShareView issue")
 
 
 def parser() -> argparse.ArgumentParser:
@@ -116,7 +107,6 @@ def parser() -> argparse.ArgumentParser:
     begin.add_argument("branch")
     begin.add_argument("--path", type=Path)
     finish = commands.add_parser("checkin")
-    finish.add_argument("--issue", type=int, required=True)
     finish.add_argument("--message", required=True)
     finish.add_argument("--verification", required=True)
     finish.add_argument("paths", nargs="+")
@@ -134,7 +124,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "checkout":
             checkout(args.branch, args.path, cwd)
         elif args.command == "checkin":
-            checkin(args.issue, args.message, args.verification, args.paths, cwd)
+            checkin(args.message, args.verification, args.paths, cwd)
         else:
             validate_pr(args.base, args.head, args.body)
     except (WorkflowError, subprocess.CalledProcessError) as error:

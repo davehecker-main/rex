@@ -5,7 +5,7 @@ on:
     types: [opened, edited, reopened, synchronize]
 
 jobs:
-  validate-source-and-issue:
+  validate-source:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,4 +19,3 @@ jobs:
           --base "$PR_BASE"
           --head "$PR_HEAD"
           --body "$PR_BODY"
-

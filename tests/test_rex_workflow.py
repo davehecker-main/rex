@@ -12,15 +12,8 @@ SPEC.loader.exec_module(workflow)
 
 
 class PullRequestPolicyTests(unittest.TestCase):
-    def test_feature_branch_with_shareview_issue_may_target_staging(self):
-        workflow.validate_pr(
-            "staging", "rex-1340-staging-workflow",
-            "Closes https://github.com/ShareViewLLC/ShareView/issues/1340",
-        )
-
-    def test_staging_pr_requires_shareview_issue(self):
-        with self.assertRaisesRegex(workflow.WorkflowError, "ShareView issue"):
-            workflow.validate_pr("staging", "feature", "no issue")
+    def test_feature_branch_may_target_staging_without_shareview_issue(self):
+        workflow.validate_pr("staging", "rex-staging-workflow", "")
 
     def test_only_staging_may_target_main(self):
         workflow.validate_pr("main", "staging", "")
@@ -35,7 +28,7 @@ class PullRequestPolicyTests(unittest.TestCase):
         with self.assertRaisesRegex(workflow.WorkflowError, "feature branch"):
             workflow.validate_pr(
                 "staging", "main",
-                "https://github.com/ShareViewLLC/ShareView/issues/1340",
+                "",
             )
 
 

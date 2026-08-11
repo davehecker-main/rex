@@ -32,21 +32,18 @@ One scoped change uses one short-lived branch and one draft pull request.
 ./bin/rex-workflow checkout rex-1234-short-description
 ```
 
-An issue is optional at checkout, so investigation and implementation can start
-without administrative overhead.
+Do not create a ShareView issue for Rex-repository-only work. Create a ShareView issue
+only when the planned change will branch and check code into the ShareView repository.
+Every ShareView issue Rex creates must receive the `rex` label.
 
 ## Check-in: publish a change
 
-A ShareView issue is mandatory before check-in and before merge to `staging`. Issue
-management remains centralized in `ShareViewLLC/ShareView`.
-
 Before check-in, run the relevant tests, review the full diff, update Rex's durable
-docs when necessary, and identify the ShareView issue. Stage explicit paths only;
-never use `git add .` or `git add -A`.
+docs when necessary, and stage explicit paths only; never use `git add .` or
+`git add -A`.
 
 ```bash
 ./bin/rex-workflow checkin \
-  --issue 1234 \
   --message "Describe the scoped change" \
   --verification "python3 -m unittest discover -s tests -v (passed)" \
   path/to/file another/path
@@ -55,6 +52,11 @@ never use `git add .` or `git add -A`.
 The helper refuses protected branches, commits only named paths, pushes the feature
 branch, and opens a draft PR targeting `staging`. The engineer reviews and merges;
 Rex does not merge its own work.
+
+For ShareView changes, coding must be complete and the `rex`-labeled ShareView issue
+must exist before opening the ShareView PR. This timing requirement does not create
+ShareView issues for changes confined to Rex or another repository. Rex never merges
+a pull request in any repository.
 
 ## Verify on staging
 
@@ -80,4 +82,3 @@ Assume another client may use the primary checkout. Inspect `git worktree list` 
 `git status` before acting. Do not switch, reset, clean, delete, or reuse another
 session's branch or worktree. Remove a worktree only after confirming its branch is
 merged and its working tree is clean.
-
