@@ -20,7 +20,17 @@ are a unit of intent, not a schedule.
 
 ## Where the record lives
 
-In the repository. Specifically:
+Rex's own repository is the canonical home for information about Rex: its identity,
+architecture, policies, operating practices, and implementation artifacts. Every
+change to Rex must include the corresponding update to the Rex repository; an issue or
+chat transcript is not a substitute for updating Rex itself.
+
+Issue management for Rex work happens in the ShareView repository. ShareView issues
+track intent, status, discussion, and follow-up work, while the Rex repository records
+the resulting durable truth. When a Rex change is tracked by a ShareView issue, the
+issue and the relevant Rex commit or pull request should link to each other.
+
+Within the Rex repository:
 
 - **The docs** hold the current rules. They describe what is true now, not the history
   of how it became true.
@@ -90,7 +100,6 @@ Sprint 0 establishes the foundation and stops there. The following are genuinely
 and are listed so they are recognized as unanswered rather than quietly invented the
 first time they come up:
 
-- How work is tracked before it becomes a branch — issues, a backlog file, or neither.
 - What automation, if any, runs against this repository.
 - How Rex's rules get applied to a project that is not Rex.
 - How to tell whether Rex is working — what gets measured, and how often it is reviewed.
