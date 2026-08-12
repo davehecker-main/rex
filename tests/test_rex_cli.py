@@ -359,12 +359,16 @@ class RexCliTests(unittest.TestCase):
                 {"node_id": "I_1", "html_url": "https://github.test/issues/1", "number": 1},
                 "request-id",
             ),
-        ):
+        ) as api:
             rex_cli.mutation_result(
                 "token",
                 rex_cli.GITHUB_CREATE_TOOL,
                 {"title": "Title", "body": "Body"},
                 grant,
+            )
+            self.assertEqual(
+                api.call_args.args[3],
+                {"title": "Title", "body": "Body", "labels": ["rex"]},
             )
             self.assertFalse(grant.available())
             with self.assertRaisesRegex(rex_cli.RexError, "not authorized"):

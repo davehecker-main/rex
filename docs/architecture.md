@@ -80,7 +80,8 @@ creation is exposed only when Dave directly runs `rex ask
 --allow-shareview-issue-create`. That grant is unavailable through `mcp-server`, permits
 at most one creation, and is consumed before the request so an ambiguous failure cannot
 be retried into a duplicate. Neither operation accepts an owner, repository, URL, node
-ID, or arbitrary GraphQL document from the model.
+ID, labels, or arbitrary GraphQL document from the model. The creation request always
+sets exactly the `rex` label.
 
 Every attempted mutation writes a separate `github-mutations.jsonl` audit record in the
 Rex state directory. Records include the verified identity, operation, target, content

@@ -321,7 +321,7 @@ def mutation_result(token: str, name: str, arguments: dict, create_grant: OneUse
             token,
             "POST",
             f"/repos/{GITHUB_OWNER}/{GITHUB_REPOSITORY}/issues",
-            {"title": title, "body": body},
+            {"title": title, "body": body, "labels": ["rex"]},
         )
         return {"id": result["node_id"], "url": result["html_url"]}, request_id, result["number"], title + "\n" + body
     raise RexError("GitHub mutation tool is not allowed", kind="github_policy_error")

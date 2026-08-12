@@ -111,5 +111,6 @@ rex ask --allow-shareview-issue-create "Create the issue we discussed"
 ```
 
 The flag exposes one fixed ShareView issue-creation tool for that invocation and is not
-available through `rex mcp-server`. Every attempted mutation is recorded in the
+available through `rex mcp-server`. Every created issue receives the `rex` label; the
+model cannot omit or replace it. Every attempted mutation is recorded in the
 permission-restricted Rex state directory without storing the token or request body.
