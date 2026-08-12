@@ -114,3 +114,14 @@ The flag exposes one fixed ShareView issue-creation tool for that invocation and
 available through `rex mcp-server`. Every created issue receives the `rex` label; the
 model cannot omit or replace it. Every attempted mutation is recorded in the
 permission-restricted Rex state directory without storing the token or request body.
+
+For a deterministic, explicitly authorized creation that does not place Codex in the
+write path, use:
+
+```bash
+rex create-shareview-issue --title "Title" --body "Body"
+```
+
+This command verifies the dedicated identity, creates exactly one issue with the fixed
+`rex` label, and uses the same append-only mutation audit. It accepts no repository,
+owner, labels, or arbitrary request payload.

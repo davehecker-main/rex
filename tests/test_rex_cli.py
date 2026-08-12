@@ -320,6 +320,89 @@ class RexCliTests(unittest.TestCase):
         mcp_args = rex_cli.build_parser().parse_args(["mcp-server"])
         self.assertFalse(hasattr(mcp_args, "allow_shareview_issue_create"))
 
+    def test_direct_issue_creation_uses_verified_identity_and_fixed_policy(self):
+        self.github_token = "dedicated-token"
+        with mock.patch.object(
+            rex_cli,
+            "verify_github_identity",
+            return_value={"login": "dr-rex-phd", "id": 316333787},
+        ) as verify, mock.patch.object(
+            rex_cli,
+            "handle_mutation_call",
+            return_value={
+                "result": {
+                    "content": [{"type": "text", "text": json.dumps(
+                        {"id": "I_1", "url": "https://github.test/issues/1"}
+                    )}],
+                    "isError": False,
+                }
+            },
+        ) as mutate:
+            created = rex_cli.create_shareview_issue_direct("Title", "Body", self.state_dir)
+        verify.assert_called_once_with("dedicated-token")
+        self.assertEqual(created["url"], "https://github.test/issues/1")
+        args = mutate.call_args.args
+        self.assertEqual(args[:3], (
+            "dedicated-token", self.state_dir,
+            {"login": "dr-rex-phd", "id": 316333787},
+        ))
+        self.assertTrue(args[3].available())
+        self.assertEqual(args[4]["params"], {
+            "name": rex_cli.GITHUB_CREATE_TOOL,
+            "arguments": {"title": "Title", "body": "Body"},
+        })
+
+    def test_direct_issue_creation_fails_without_dedicated_credential(self):
+        self.github_token = None
+        with self.assertRaisesRegex(rex_cli.RexError, "not configured"):
+            rex_cli.create_shareview_issue_direct("Title", "Body", self.state_dir)
+
+    def test_direct_issue_creation_surfaces_audited_failure(self):
+        self.github_token = "dedicated-token"
+        with mock.patch.object(
+            rex_cli, "verify_github_identity",
+            return_value={"login": "dr-rex-phd", "id": 316333787},
+        ), mock.patch.object(
+            rex_cli, "handle_mutation_call",
+            return_value={"result": {
+                "content": [{"type": "text", "text": "GitHub rejected it"}],
+                "isError": True,
+            }},
+        ):
+            with self.assertRaisesRegex(rex_cli.RexError, "GitHub rejected it"):
+                rex_cli.create_shareview_issue_direct("Title", "Body", self.state_dir)
+
+    def test_direct_issue_creation_reports_created_url_when_final_audit_fails(self):
+        self.github_token = "dedicated-token"
+        with mock.patch.object(
+            rex_cli, "verify_github_identity",
+            return_value={"login": "dr-rex-phd", "id": 316333787},
+        ), mock.patch.object(
+            rex_cli, "handle_mutation_call",
+            return_value={"result": {
+                "content": [
+                    {"type": "text", "text": json.dumps({
+                        "id": "I_1", "url": "https://github.test/issues/1"
+                    })},
+                    {"type": "text", "text": "Audit finalization failed; preliminary record abc remains unresolved"},
+                ],
+                "isError": False,
+            }},
+        ):
+            with self.assertRaisesRegex(
+                rex_cli.RexError,
+                "Issue created at https://github.test/issues/1, but completion is unresolved",
+            ):
+                rex_cli.create_shareview_issue_direct("Title", "Body", self.state_dir)
+
+    def test_direct_issue_creation_cli_accepts_only_title_and_body(self):
+        args = rex_cli.build_parser().parse_args([
+            "create-shareview-issue", "--title", "Title", "--body", "Body"
+        ])
+        self.assertEqual(args.title, "Title")
+        self.assertEqual(args.body, "Body")
+        self.assertFalse(hasattr(args, "labels"))
+
     def test_sse_tool_list_is_augmented_without_losing_read_tools(self):
         original = {
             "jsonrpc": "2.0",

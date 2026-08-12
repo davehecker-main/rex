@@ -83,6 +83,11 @@ be retried into a duplicate. Neither operation accepts an owner, repository, URL
 ID, labels, or arbitrary GraphQL document from the model. The creation request always
 sets exactly the `rex` label.
 
+The direct `create-shareview-issue` command uses that same identity verification,
+fixed request, one-use grant, and audit handler without starting Codex. This is the
+deterministic path for an explicit creation instruction; it avoids broadening Codex's
+approval or filesystem sandbox merely to authorize one GitHub mutation.
+
 Every attempted mutation writes a separate `github-mutations.jsonl` audit record in the
 Rex state directory. Records include the verified identity, operation, target, content
 digest and length, correlation ID, GitHub request ID, authorization state, and outcome;

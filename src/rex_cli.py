@@ -399,6 +399,51 @@ def handle_mutation_call(
     return response
 
 
+def create_shareview_issue_direct(title: str, body: str, state_dir: Path) -> dict:
+    """Create one fixed-policy ShareView issue without placing Codex in the write path."""
+    token = read_github_token()
+    if not token:
+        raise RexError("Rex GitHub credential is not configured", kind="github_identity_error")
+    identity = verify_github_identity(token)
+    request = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "params": {
+            "name": GITHUB_CREATE_TOOL,
+            "arguments": {"title": title, "body": body},
+        },
+    }
+    response = handle_mutation_call(
+        token, state_dir, identity, OneUseGrant(True), request
+    )
+    result = response.get("result", {})
+    content = result.get("content", [])
+    if result.get("isError") or not content:
+        detail = content[0].get("text") if content else "Issue creation failed"
+        raise RexError(detail, kind="github_error")
+    try:
+        created = json.loads(content[0]["text"])
+    except (KeyError, TypeError, json.JSONDecodeError) as error:
+        raise RexError(
+            "GitHub issue creation returned an unreadable result", kind="github_error"
+        ) from error
+    if not isinstance(created, dict) or not isinstance(created.get("url"), str):
+        raise RexError(
+            "GitHub issue creation returned an incomplete result", kind="github_error"
+        )
+    if len(content) > 1:
+        warnings = "; ".join(
+            item.get("text", "unknown warning")
+            for item in content[1:]
+            if isinstance(item, dict)
+        )
+        raise RexError(
+            f"Issue created at {created['url']}, but completion is unresolved: {warnings}",
+            kind="github_audit_error",
+        )
+    return created
+
+
 @contextmanager
 def github_mcp_proxy(token: str, state_dir: Path, create_grant: OneUseGrant):
     """Keep the GitHub credential outside the Codex process and its shell tools."""
@@ -1104,6 +1149,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="authorize at most one ShareView issue creation for this direct invocation",
     )
+    create_parser = subparsers.add_parser(
+        "create-shareview-issue",
+        help="create one audited ShareView issue through the dedicated Rex identity",
+    )
+    create_parser.add_argument("--title", required=True, help="issue title")
+    create_parser.add_argument("--body", required=True, help="issue body")
     subparsers.add_parser("status", help="show the persistent Rex session ID")
     subparsers.add_parser("mcp-server", help="serve ask_rex over MCP stdio")
     return parser
@@ -1124,6 +1175,10 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         if args.command == "mcp-server":
             return serve_mcp(sys.stdin, sys.stdout)
+        if args.command == "create-shareview-issue":
+            created = create_shareview_issue_direct(args.title, args.body, state_dir)
+            print(f"Created ShareView issue: {created['url']}")
+            return 0
         if args.command != "ask":
             parser.print_help(sys.stderr)
             return 2

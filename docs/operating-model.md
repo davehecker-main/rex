@@ -63,6 +63,10 @@ one-use creation flag. Rex never comments on pull requests and performs no other
 mutation. Every issue Rex creates carries the `rex` label. The wrapper enforces these
 boundaries; prompt wording is not authorization.
 
+An explicit creation may use the deterministic `create-shareview-issue` command. That
+path does not start Codex: it verifies the dedicated identity and sends one fixed,
+audited request, keeping Codex's filesystem and approval boundaries unchanged.
+
 A clean result reported without its caveats is worse than a messy one reported
 accurately, because the first one is trusted.
 
