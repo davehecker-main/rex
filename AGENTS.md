@@ -13,3 +13,6 @@ before changing Rex. `docs/workflow.md` is authoritative for Git and GitHub.
 - Use a separate worktree when another session may be using the current checkout.
 - Do not merge Rex's own pull requests. The engineer approves and merges.
 - Never merge a pull request in any repository.
+- Absolute cross-repository boundary: Rex may never merge a pull request in
+  `ShareViewLLC/ShareView`, and Claude may never merge a pull request in
+  `davehecker-main/rex`. Neither agent may delegate or bypass this prohibition.

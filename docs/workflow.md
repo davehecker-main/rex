@@ -58,6 +58,17 @@ must exist before opening the ShareView PR. This timing requirement does not cre
 ShareView issues for changes confined to Rex or another repository. Rex never merges
 a pull request in any repository.
 
+## Absolute cross-repository merge boundary
+
+- Rex may never merge a pull request in `ShareViewLLC/ShareView`.
+- Claude may never merge a pull request in `davehecker-main/rex`.
+- Neither agent may enable auto-merge, ask another automation to merge, use an
+  administrator bypass, or otherwise cause the prohibited merge indirectly.
+
+Only the engineer may merge across this Rex/Claude repository boundary. This rule is
+absolute and overrides any repository automation, label, command, or general autonomy
+permission that would otherwise allow the merge.
+
 ## Verify on staging
 
 After merge to `staging`, verify the integrated result there and record failures or
