@@ -106,7 +106,7 @@ class RexCliTests(unittest.TestCase):
         self.github_proxy = mock.patch.object(
             rex_cli,
             "github_mcp_proxy",
-            side_effect=lambda _token: rex_cli.nullcontext(
+            side_effect=lambda _token, _state_dir, _allow_create=False: rex_cli.nullcontext(
                 "http://127.0.0.1:45678/mcp/"
             ),
         )
@@ -202,6 +202,223 @@ class RexCliTests(unittest.TestCase):
         self.assertEqual(
             len([key for key in headers if key.lower() == "x-mcp-tools"]), 1
         )
+
+    def test_github_identity_is_pinned_to_dr_rex_phd(self):
+        with mock.patch.object(
+            rex_cli,
+            "github_api",
+            return_value=({"login": "someone-else", "id": 1}, "request-id"),
+        ):
+            with self.assertRaisesRegex(rex_cli.RexError, "not dr-rex-phd"):
+                rex_cli.verify_github_identity("token")
+
+    def test_mutation_failures_do_not_falsely_claim_denial(self):
+        self.assertEqual(
+            rex_cli.mutation_error_outcome(
+                rex_cli.RexError("policy", kind="github_policy_error")
+            ),
+            "denied",
+        )
+        self.assertEqual(
+            rex_cli.mutation_error_outcome(
+                rex_cli.RexError("rejected", kind="github_error")
+            ),
+            "failed",
+        )
+        self.assertEqual(rex_cli.mutation_error_outcome(OSError("reset")), "unknown")
+        self.assertEqual(rex_cli.mutation_error_outcome(KeyError("shape")), "unknown")
+
+    def test_mutation_handler_audits_before_and_after_with_verified_identity(self):
+        records = []
+        request = {
+            "id": 7,
+            "params": {
+                "name": rex_cli.GITHUB_COMMENT_TOOL,
+                "arguments": {"issue_number": 12, "body": "Comment"},
+            },
+        }
+        with mock.patch.object(
+            rex_cli, "audit_mutation", side_effect=lambda _state, record: records.append(record.copy())
+        ), mock.patch.object(
+            rex_cli,
+            "mutation_result",
+            return_value=({"url": "https://github.test/comment"}, "request-id", 12, "Comment"),
+        ):
+            response = rex_cli.handle_mutation_call(
+                "token",
+                self.state_dir,
+                {"login": "dr-rex-phd", "id": 316333787},
+                rex_cli.OneUseGrant(False),
+                request,
+            )
+        self.assertFalse(response["result"]["isError"])
+        self.assertEqual([record["outcome"] for record in records], ["attempted", "success"])
+        self.assertEqual(records[0]["correlation_id"], records[1]["correlation_id"])
+        self.assertEqual(records[0]["login"], "dr-rex-phd")
+        self.assertEqual(records[0]["user_id"], 316333787)
+
+    def test_ambiguous_mutation_failure_is_finalized_unknown(self):
+        records = []
+        request = {
+            "id": 8,
+            "params": {"name": rex_cli.GITHUB_COMMENT_TOOL, "arguments": {}},
+        }
+        with mock.patch.object(
+            rex_cli, "audit_mutation", side_effect=lambda _state, record: records.append(record.copy())
+        ), mock.patch.object(
+            rex_cli, "mutation_result", side_effect=OSError("connection reset")
+        ):
+            response = rex_cli.handle_mutation_call(
+                "token",
+                self.state_dir,
+                {"login": "dr-rex-phd", "id": 316333787},
+                rex_cli.OneUseGrant(False),
+                request,
+            )
+        self.assertTrue(response["result"]["isError"])
+        self.assertEqual([record["outcome"] for record in records], ["attempted", "unknown"])
+
+    def test_final_audit_failure_leaves_preliminary_record_identifiable(self):
+        records = []
+
+        def audit(_state, record):
+            if records:
+                raise OSError("disk full")
+            records.append(record.copy())
+
+        request = {
+            "id": 9,
+            "params": {"name": rex_cli.GITHUB_COMMENT_TOOL, "arguments": {}},
+        }
+        with mock.patch.object(rex_cli, "audit_mutation", side_effect=audit), mock.patch.object(
+            rex_cli,
+            "mutation_result",
+            return_value=({"url": "https://github.test/comment"}, "request-id", 12, "Comment"),
+        ):
+            response = rex_cli.handle_mutation_call(
+                "token",
+                self.state_dir,
+                {"login": "dr-rex-phd", "id": 316333787},
+                rex_cli.OneUseGrant(False),
+                request,
+            )
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["outcome"], "attempted")
+        self.assertIn(records[0]["correlation_id"], response["result"]["content"][1]["text"])
+
+    def test_issue_creation_tool_requires_direct_invocation_grant(self):
+        normal = [tool["name"] for tool in rex_cli.custom_tool_definitions(False)]
+        granted = [tool["name"] for tool in rex_cli.custom_tool_definitions(True)]
+        self.assertEqual(normal, [rex_cli.GITHUB_COMMENT_TOOL])
+        self.assertEqual(
+            granted, [rex_cli.GITHUB_COMMENT_TOOL, rex_cli.GITHUB_CREATE_TOOL]
+        )
+        args = rex_cli.build_parser().parse_args(
+            ["ask", "--allow-shareview-issue-create", "create", "it"]
+        )
+        self.assertTrue(args.allow_shareview_issue_create)
+        mcp_args = rex_cli.build_parser().parse_args(["mcp-server"])
+        self.assertFalse(hasattr(mcp_args, "allow_shareview_issue_create"))
+
+    def test_sse_tool_list_is_augmented_without_losing_read_tools(self):
+        original = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {"tools": [{"name": "issue_read"}]},
+        }
+        payload = ("event: message\ndata: " + json.dumps(original) + "\n\n").encode()
+        augmented = rex_cli.augment_tool_list(payload, False).decode()
+        data_line = next(line for line in augmented.splitlines() if line.startswith("data:"))
+        tools = json.loads(data_line[5:].strip())["result"]["tools"]
+        self.assertEqual(
+            [tool["name"] for tool in tools],
+            ["issue_read", rex_cli.GITHUB_COMMENT_TOOL],
+        )
+
+    def test_comment_resolves_an_issue_type_before_mutating(self):
+        responses = [
+            ({"data": {"repository": {"issue": None}}}, "lookup-request"),
+        ]
+        with mock.patch.object(rex_cli, "github_api", side_effect=responses) as api:
+            with self.assertRaisesRegex(rex_cli.RexError, "not a ShareView issue"):
+                rex_cli.mutation_result(
+                    "token",
+                    rex_cli.GITHUB_COMMENT_TOOL,
+                    {"issue_number": 15, "body": "no PR comments"},
+                    rex_cli.OneUseGrant(False),
+                )
+        self.assertEqual(api.call_count, 1)
+        self.assertIn("issue(number:$number)", api.call_args.args[3]["query"])
+
+    def test_issue_creation_grant_is_consumed_before_request(self):
+        grant = rex_cli.OneUseGrant(True)
+        with mock.patch.object(
+            rex_cli,
+            "github_api",
+            return_value=(
+                {"node_id": "I_1", "html_url": "https://github.test/issues/1", "number": 1},
+                "request-id",
+            ),
+        ):
+            rex_cli.mutation_result(
+                "token",
+                rex_cli.GITHUB_CREATE_TOOL,
+                {"title": "Title", "body": "Body"},
+                grant,
+            )
+            self.assertFalse(grant.available())
+            with self.assertRaisesRegex(rex_cli.RexError, "not authorized"):
+                rex_cli.mutation_result(
+                    "token",
+                    rex_cli.GITHUB_CREATE_TOOL,
+                    {"title": "Again", "body": "Body"},
+                    grant,
+                )
+
+    def test_issue_creation_grant_is_atomic(self):
+        grant = rex_cli.OneUseGrant(True)
+        barrier = rex_cli.threading.Barrier(3)
+        results = []
+
+        def consume():
+            barrier.wait()
+            results.append(grant.consume())
+
+        threads = [rex_cli.threading.Thread(target=consume) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        barrier.wait()
+        for thread in threads:
+            thread.join()
+        self.assertEqual(sorted(results), [False, True])
+
+    def test_recovery_reuses_the_same_creation_grant(self):
+        grant_ids = []
+
+        def proxy(_token, _state_dir, grant):
+            grant_ids.append(id(grant))
+            return rex_cli.nullcontext("http://127.0.0.1:45678/mcp/")
+
+        self.github_proxy.stop()
+        self.github_proxy = mock.patch.object(rex_cli, "github_mcp_proxy", side_effect=proxy)
+        self.github_proxy.start()
+        self.github_token = "token"
+        self.state_dir.mkdir()
+        rex_cli.write_session_id(
+            self.state_dir, "22222222-2222-2222-2222-222222222222"
+        )
+        os.environ["FAKE_CODEX_MISSING"] = "1"
+        os.environ["FAKE_CODEX_MISSING_MARKER"] = str(self.root / "missing-grant")
+        rex_cli.ask(
+            prompt="recover",
+            state_dir=self.state_dir,
+            repo_root=self.repo_root,
+            codex_binary=str(self.fake_codex),
+            lock_timeout=1,
+            allow_issue_create=True,
+        )
+        self.assertEqual(len(grant_ids), 2)
+        self.assertEqual(len(set(grant_ids)), 1)
 
     def test_later_call_resumes_without_bootstrap(self):
         self.invoke("first")

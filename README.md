@@ -89,14 +89,27 @@ an installation: it resolves `../src/rex_cli.py` relative to its own location.
 Rex starts in a read-only sandbox. It can inspect, advise, review, and propose; changes
 still require a separately authorized implementation workflow.
 
-When a dedicated GitHub credential is available, the wrapper also gives Rex read-only
-access to GitHub issues and pull requests through GitHub's official remote MCP server.
+When the dedicated `dr-rex-phd` GitHub credential is available, the wrapper gives Rex
+read access to GitHub issues and pull requests plus the ability to comment on ShareView
+issues. Pull-request comments and every other mutation remain unavailable.
 On macOS it reads the credential from the `com.davidhecker.rex.github-read` Keychain
 item for account `rex`. Use a fine-grained token restricted to
-`ShareViewLLC/ShareView` with read-only Metadata, Issues, and Pull requests permissions.
+`ShareViewLLC/ShareView` with Metadata read, Pull requests read, and Issues read/write.
 The wrapper ignores the user's global Codex configuration and sends MCP traffic through
 a loopback proxy that holds the credential outside the Codex process. The proxy exposes
-only issue and pull-request read/list/search tools and enables GitHub's read-only mode.
+only issue and pull-request read/list/search tools plus a fixed issue-comment tool. The
+comment path resolves a typed Issue before mutation, so it rejects pull requests.
 The token is unavailable to model-run shell commands and never appears in command-line
 arguments or telemetry. Without that dedicated token, GitHub access is not configured
 and Rex continues to work locally.
+
+Issue creation is a separate, one-use capability available only from a direct local
+invocation:
+
+```bash
+rex ask --allow-shareview-issue-create "Create the issue we discussed"
+```
+
+The flag exposes one fixed ShareView issue-creation tool for that invocation and is not
+available through `rex mcp-server`. Every attempted mutation is recorded in the
+permission-restricted Rex state directory without storing the token or request body.

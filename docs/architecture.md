@@ -62,19 +62,37 @@ wrapper finds its dedicated credential in the macOS Keychain item
 `com.davidhecker.rex.github-read` for account `rex`, it configures GitHub's official
 remote MCP server for the Rex invocation with an allow-list of issue and pull-request
 read/list/search tools and the server's read-only filter. The token must be fine-grained,
-restricted to `ShareViewLLC/ShareView`, and grant only read access to Metadata, Issues,
-and Pull requests. Rex ignores the user's global Codex configuration so unrelated MCP
+restricted to `ShareViewLLC/ShareView`, and grant Metadata read, Pull requests read, and
+Issues read/write. The wider Issues credential permission is not the policy boundary:
+the wrapper verifies the live login and immutable user ID as `dr-rex-phd` and exposes
+only fixed operations. Rex ignores the user's global Codex configuration so unrelated MCP
 servers and plugins are unavailable. The wrapper holds the token in a short-lived
-loopback MCP proxy outside the Codex process. The proxy fixes the upstream host, tool
-allow-list, and read-only header. The token is unavailable to model-run shell commands
-and is never written to arguments,
-state, or invocation telemetry. If it is absent, the GitHub MCP server is not
+loopback MCP proxy outside the Codex process. The proxy fixes the upstream host, read
+tool allow-list, and read-only header, and implements the two allowed issue mutations
+itself. The token is unavailable to model-run shell commands and is never written to
+arguments, state, or invocation telemetry. If it is absent, the GitHub MCP server is not
 configured.
 
+Normal invocations add one mutation tool: comment on a ShareView issue. The wrapper
+first resolves the number through GraphQL's typed `Issue` field and then comments on
+that immutable node ID; a pull request with the same number fails the type check. Issue
+creation is exposed only when Dave directly runs `rex ask
+--allow-shareview-issue-create`. That grant is unavailable through `mcp-server`, permits
+at most one creation, and is consumed before the request so an ambiguous failure cannot
+be retried into a duplicate. Neither operation accepts an owner, repository, URL, node
+ID, or arbitrary GraphQL document from the model.
+
+Every attempted mutation writes a separate `github-mutations.jsonl` audit record in the
+Rex state directory. Records include the verified identity, operation, target, content
+digest and length, correlation ID, GitHub request ID, authorization state, and outcome;
+credentials and request bodies are never recorded. The preliminary `attempted` record
+is durable before dispatch. A missing final record therefore means the outcome is
+explicitly unresolved rather than falsely denied.
+
 These controls are intentionally independent: Codex's read-only sandbox prevents
-filesystem mutation, the MCP read-only filter removes GitHub mutation tools, and the
-repository-scoped read-only credential makes GitHub reject writes even if a tool-filter
-regression occurred.
+filesystem mutation; the upstream MCP read-only filter removes GitHub's general
+mutation tools; the proxy exposes only fixed, audited issue operations; and the
+repository-scoped credential prevents access outside ShareView.
 
 ## Persistence
 
