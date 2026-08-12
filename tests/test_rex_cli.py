@@ -41,11 +41,17 @@ output_path = Path(args[output_flag + 1])
 is_resume = "resume" in args
 session_id = args[args.index("resume") + 1] if is_resume else "11111111-1111-1111-1111-111111111111"
 
+# Codex reports usage as a running session total, so the fake does too: the Nth
+# call for a given session id reports N times the per-turn figure.
+counter = log_path.parent / ("usage-" + session_id + ".count")
+turn_number = (int(counter.read_text()) if counter.exists() else 0) + 1
+counter.write_text(str(turn_number))
+
 def emit_usage():
     print(json.dumps({"type": "turn.completed", "usage": {
-        "input_tokens": int(os.environ.get("FAKE_CODEX_INPUT_TOKENS", "100")),
-        "cached_input_tokens": int(os.environ.get("FAKE_CODEX_CACHED_TOKENS", "40")),
-        "output_tokens": int(os.environ.get("FAKE_CODEX_OUTPUT_TOKENS", "20")),
+        "input_tokens": int(os.environ.get("FAKE_CODEX_INPUT_TOKENS", "100")) * turn_number,
+        "cached_input_tokens": int(os.environ.get("FAKE_CODEX_CACHED_TOKENS", "40")) * turn_number,
+        "output_tokens": int(os.environ.get("FAKE_CODEX_OUTPUT_TOKENS", "20")) * turn_number,
     }}))
 
 if is_resume and os.environ.get("FAKE_CODEX_MISSING") == "1":
@@ -216,9 +222,13 @@ class RexCliTests(unittest.TestCase):
         self.assertEqual(record["attempts"], 1)
         self.assertFalse(record["recovery_attempted"])
         self.assertFalse(record["recovery_succeeded"])
-        self.assertEqual(record["input_tokens"], 100)
-        self.assertEqual(record["cached_input_tokens"], 40)
-        self.assertEqual(record["output_tokens"], 20)
+        self.assertEqual(record["version"], 2)
+        self.assertEqual(record["session_input_tokens"], 100)
+        self.assertEqual(record["session_cached_input_tokens"], 40)
+        self.assertEqual(record["session_output_tokens"], 20)
+        self.assertEqual(record["call_input_tokens"], 100)
+        self.assertEqual(record["call_cached_input_tokens"], 40)
+        self.assertEqual(record["call_output_tokens"], 20)
         self.assertIsNone(record["cost_usd"])
         self.assertIsNone(record["failure_kind"])
         self.assertGreater(record["duration_seconds"], 0)
@@ -239,10 +249,13 @@ class RexCliTests(unittest.TestCase):
         self.assertEqual(second["attempts"], 1)
         self.assertFalse(second["recovery_attempted"])
         self.assertFalse(second["recovery_succeeded"])
-        self.assertEqual(second["input_tokens"], 100)
-        self.assertEqual(second["output_tokens"], 20)
+        # The session counter has advanced; the call cost has not.
+        self.assertEqual(second["session_input_tokens"], 200)
+        self.assertEqual(second["session_output_tokens"], 40)
+        self.assertEqual(second["call_input_tokens"], 100)
+        self.assertEqual(second["call_output_tokens"], 20)
 
-    def test_recovery_records_both_attempts_and_total_usage(self):
+    def test_recovery_does_not_add_the_dead_session_to_the_new_one(self):
         self.state_dir.mkdir()
         rex_cli.write_session_id(
             self.state_dir, "66666666-6666-6666-6666-666666666666"
@@ -257,9 +270,39 @@ class RexCliTests(unittest.TestCase):
         self.assertEqual(record["attempts"], 2)
         self.assertTrue(record["recovery_attempted"])
         self.assertTrue(record["recovery_succeeded"])
-        self.assertEqual(record["input_tokens"], 200)
-        self.assertEqual(record["cached_input_tokens"], 80)
-        self.assertEqual(record["output_tokens"], 40)
+        # Both attempts reported a cumulative total of 100. Adding them would claim
+        # this call cost 200 and charge the dead session's lifetime to the new one.
+        self.assertEqual(record["session_input_tokens"], 100)
+        self.assertEqual(record["session_cached_input_tokens"], 40)
+        self.assertEqual(record["session_output_tokens"], 20)
+        self.assertEqual(record["call_input_tokens"], 100)
+        self.assertEqual(record["call_output_tokens"], 20)
+
+    def test_unknown_baseline_records_a_null_call_cost(self):
+        """A missing baseline is recorded as unknown, never as a guessed delta."""
+        self.state_dir.mkdir()
+        rex_cli.write_session_id(
+            self.state_dir, "99999999-9999-9999-9999-999999999999"
+        )
+        self.assertEqual(self.invoke("no baseline on disk"), "rex response")
+        record = self.records()[0]
+        self.assertTrue(record["started_with_session"])
+        self.assertEqual(record["session_input_tokens"], 100)
+        self.assertIsNone(record["call_input_tokens"])
+        self.assertIsNone(record["call_cached_input_tokens"])
+        self.assertIsNone(record["call_output_tokens"])
+
+    def test_baseline_from_another_session_is_ignored(self):
+        self.invoke("first")
+        baseline = json.loads(
+            rex_cli.usage_baseline_path(self.state_dir).read_text()
+        )
+        self.assertEqual(baseline["session_id"], "11111111-1111-1111-1111-111111111111")
+        rex_cli.write_usage_baseline(
+            self.state_dir, "not-the-live-session", {"input_tokens": 99999}
+        )
+        self.invoke("second")
+        self.assertIsNone(self.records()[1]["call_input_tokens"])
 
     def test_failed_recovery_is_recorded(self):
         self.state_dir.mkdir()
