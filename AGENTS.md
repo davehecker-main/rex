@@ -16,3 +16,5 @@ before changing Rex. `docs/workflow.md` is authoritative for Git and GitHub.
 - Absolute cross-repository boundary: Rex may never merge a pull request in
   `ShareViewLLC/ShareView`, and Claude may never merge a pull request in
   `davehecker-main/rex`. Neither agent may delegate or bypass this prohibition.
+  Rex may not write to `ShareViewLLC/ShareView`, and Claude may not write to
+  `davehecker-main/rex`, without Dave's explicit permission for that action.

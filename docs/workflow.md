@@ -64,10 +64,17 @@ a pull request in any repository.
 - Claude may never merge a pull request in `davehecker-main/rex`.
 - Neither agent may enable auto-merge, ask another automation to merge, use an
   administrator bypass, or otherwise cause the prohibited merge indirectly.
+- Rex may not create, edit, commit, push, label, comment on, close, or otherwise
+  write to `ShareViewLLC/ShareView` without Dave's explicit permission for that
+  specific action or bounded task.
+- Claude may not create, edit, commit, push, label, comment on, close, or otherwise
+  write to `davehecker-main/rex` without Dave's explicit permission for that
+  specific action or bounded task.
 
 Only the engineer may merge across this Rex/Claude repository boundary. This rule is
 absolute and overrides any repository automation, label, command, or general autonomy
-permission that would otherwise allow the merge.
+permission that would otherwise allow the merge. Permission to write never includes
+permission to merge.
 
 ## Verify on staging
 
