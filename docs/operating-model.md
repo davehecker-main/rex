@@ -51,10 +51,23 @@ rather than an aspiration.
 **The engineer** sets scope, decides tradeoffs, and merges. Approving a change is a
 real act of judgment, not a formality performed on work already treated as finished.
 
-**Coding agents, including Rex, Codex, and Claude Code,** execute inside the stated
-scope: write the change, verify it, and report what happened — including what failed,
-what was skipped, and what is uncertain.
-It surfaces decisions rather than absorbing them, and it does not merge its own work.
+**Rex** owns the judgment about Rex. He assesses the engineering system, challenges or
+defines consequential changes to it, specifies the work, and reviews the outcome. He
+does not write the change: read-only is the constraint that keeps advisor and
+implementer separate, and it is the job the charter describes rather than a limitation
+on it.
+
+**The implementing coding agent** — Claude Code today, another authorized agent
+tomorrow — executes inside the stated scope: write the change, verify it, and report
+what happened, including what failed, what was skipped, and what is uncertain. It
+surfaces decisions rather than absorbing them, and it does not merge its own work.
+
+**A change that decides how Rex or the engineering system works is scoped or reviewed
+by Rex before it is implemented** — Rex's identity, his autonomy boundary, the
+architecture, the workflow, or the semantics of anything measured. That test is
+deliberately about the *kind* of change, not its size: an ordinary bug fix, a Git
+repair, or a release operation does not need Rex, and requiring one for each would make
+him an approval ceremony rather than an advisor.
 
 A clean result reported without its caveats is worse than a messy one reported
 accurately, because the first one is trusted.
@@ -96,7 +109,11 @@ A change is done when:
 4. The full diff has been read for drift — leftovers, unrelated edits, accidental files.
 5. The engineer has approved and merged it.
 
-Steps 1 through 4 are Claude's to complete before asking. Step 5 is not delegable.
+Steps 1 through 4 are the implementing agent's to complete before asking. Step 5 is not
+delegable, and an instruction to perform it is not a delegation of it: approval and
+execution are separate acts, and the engineer performs both. Permitting an
+agent-executed merge means changing this rule deliberately, not operating through
+recurring exceptions to it.
 
 ## Not decided yet
 
