@@ -17,6 +17,7 @@ consistently instead of being re-derived in every session.
 | `docs/operating-model.md` | How work actually runs: the unit of work, the human/agent split, what "done" means |
 | `docs/architecture.md` | How clients reach one persistent, on-demand Rex agent |
 | `docs/workflow.md` | Mandatory checkout, check-in, staging, and release rules |
+| `docs/personality.md` | Rex's temperament, voice, humor, and communication style |
 
 Read the charter for *why Rex exists*, the constitution for *what Rex will not do*,
 and the operating model for *how a change gets made*.
@@ -40,6 +41,7 @@ docs/charter.md             mission and scope
 docs/constitution.md        fixed principles
 docs/operating-model.md     how work runs
 docs/workflow.md            Git and GitHub workflow
+docs/personality.md         personality and communication style
 AGENTS.md                   instructions loaded by coding agents
 bin/rex-workflow            guarded checkout/check-in command
 ```
