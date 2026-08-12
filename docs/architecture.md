@@ -15,7 +15,7 @@ Claude / ChatGPT Desktop / CLI
         |            +-- single-invocation lock
         |            +-- canonical session ID
         v
- codex exec resume
+ codex exec / codex exec resume
         |
         v
  persistent Codex rollout + /rex repository
@@ -31,11 +31,23 @@ the ID exists, it calls `codex exec resume`. If it does not exist, or Codex repo
 that the session no longer exists, the wrapper creates and bootstraps a replacement
 session and atomically records its ID.
 
-Only one call may use the Rex session at a time. Concurrent clients wait for the lock
-rather than writing to the same Codex rollout simultaneously.
+Recovery is deliberately narrow. Only missing-session diagnostics actually observed
+on Codex's stderr trigger replacement. Other resume failures preserve the stored
+session ID and are reported to the caller; model-influenced JSON output is never
+treated as a transport diagnostic.
+
+Only one call may use the Rex session at a time. Concurrent clients wait for the lock,
+up to the configured timeout, rather than writing to the same Codex rollout
+simultaneously.
 
 For agent clients, `rex mcp-server` exposes the same path over stdio MCP. It offers one
 tool, `ask_rex`, and no general shell or filesystem capability.
+
+ShareView is the first configured agent client. Its project MCP configuration starts
+`rex mcp-server`, and its Claude Code `/rex` command uses a stateless proxy that calls
+`ask_rex` exactly once and returns Rex's response unchanged. Session identity,
+serialization, bootstrap, and recovery remain owned by the wrapper, not by the
+ShareView client or its proxy.
 
 ## Permissions
 

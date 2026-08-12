@@ -46,8 +46,16 @@ bin/rex-workflow            guarded checkout/check-in command
 
 ## Status
 
-Sprint 0. The foundation and persistent-agent implementation exist. Rex's Git and
-GitHub workflow is automated where the repository's GitHub plan permits.
+The first working version is implemented. `bin/rex` and `src/rex_cli.py` provide the
+on-demand wrapper; the test suite covers initial bootstrap, session persistence,
+serialized access, MCP exposure, recovery when Codex reports that a stored session no
+longer exists, and per-invocation telemetry. ShareView is the first configured client:
+its Claude Code `/rex` command reaches the wrapper through the narrow `ask_rex` MCP
+tool. Rex's Git and GitHub workflow is automated where the repository's GitHub plan
+permits.
+
+What Rex deliberately has not decided remains listed at the end of
+`docs/operating-model.md`.
 
 ## Persistent Rex
 
@@ -60,13 +68,21 @@ The Codex session provides conversational continuity; this repository remains Re
 authoritative long-term memory. Claude Code, ChatGPT Desktop, and future clients are
 interfaces into Rex rather than separate Rex instances. See `docs/architecture.md`.
 
-Ask Rex locally:
+Use Rex from this checkout:
 
 ```bash
 ./bin/rex ask "What should I work on next?"
 ./bin/rex status
 ./bin/rex mcp-server
 ```
+
+`ask` is the interactive CLI path. Agent clients start `mcp-server` and call its
+`ask_rex` tool.
+
+The wrapper expects `bin/rex` and `src/rex_cli.py` to retain their repository-relative
+layout. For ShareView, set `REX_BIN` to the absolute path of this checkout's `bin/rex`,
+or provide a complete `rex` installation on `PATH`. Copying `bin/rex` by itself is not
+an installation: it resolves `../src/rex_cli.py` relative to its own location.
 
 Rex starts in a read-only sandbox. It can inspect, advise, review, and propose; changes
 still require a separately authorized implementation workflow.

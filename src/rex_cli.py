@@ -11,16 +11,65 @@ import subprocess
 import sys
 import tempfile
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TextIO
 
 
 STATE_VERSION = 1
-SESSION_NOT_FOUND = "session not found"
+INVOCATION_RECORD_VERSION = 2
+TOKEN_USAGE_FIELDS = (
+    "input_tokens",
+    "cached_input_tokens",
+    "output_tokens",
+)
+
+# The two phrasings `codex exec resume` has actually been observed producing for a
+# session it cannot resume. Both are measured, not guessed: "session not found for
+# thread_id", and "no rollout found for thread id <id> (code -32600)" once the
+# rollout has been pruned.
+#
+# Deliberately not a wider list. A false positive here is worse than the bug this
+# recovers from: it discards a live session and silently hands the caller a Rex with
+# no memory. A phrase only plausibly emitted is not evidence, so it does not belong.
+UNRESUMABLE_SESSION_MARKERS = (
+    "session not found",
+    "no rollout found",
+)
 
 
 class RexError(RuntimeError):
-    """An expected Rex invocation failure."""
+    """An expected Rex invocation failure.
+
+    `kind` is set at the raise site rather than derived from the message. Reading a
+    category back out of human-readable text is the mistake that cost a live session
+    once already; telemetry classifies failures off this field alone.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        stderr: str = "",
+        kind: str | None = None,
+        usage: dict[str, int] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.stderr = stderr
+        self.kind = kind
+        self.usage = usage
+
+
+def is_unresumable_session(error: BaseException) -> bool:
+    """True when Codex's diagnostics say the stored session no longer exists.
+
+    Reads Codex's stderr alone. The combined stderr+stdout blob carried in the
+    exception message also holds `--json` event output, which is model-influenced
+    text: a marker appearing inside a Rex response would otherwise be read as a
+    transport diagnostic and cost a live session.
+    """
+    lowered = getattr(error, "stderr", "").lower()
+    return any(marker in lowered for marker in UNRESUMABLE_SESSION_MARKERS)
 
 
 def default_repo_root() -> Path:
@@ -45,12 +94,16 @@ def read_session_id(state_dir: Path) -> str | None:
     try:
         state = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
-        raise RexError(f"Cannot read Rex state at {path}: {error}") from error
+        raise RexError(
+            f"Cannot read Rex state at {path}: {error}", kind="state_error"
+        ) from error
     if state.get("version") != STATE_VERSION:
-        raise RexError(f"Unsupported Rex state version in {path}")
+        raise RexError(f"Unsupported Rex state version in {path}", kind="state_error")
     session_id = state.get("session_id")
     if not isinstance(session_id, str) or not session_id:
-        raise RexError(f"Rex state at {path} has no valid session_id")
+        raise RexError(
+            f"Rex state at {path} has no valid session_id", kind="state_error"
+        )
     return session_id
 
 
@@ -92,7 +145,8 @@ def acquire_lock(state_dir: Path, timeout_seconds: float) -> TextIO:
             if time.monotonic() >= deadline:
                 lock_handle.close()
                 raise RexError(
-                    f"Rex is busy; timed out after {timeout_seconds:g} seconds"
+                    f"Rex is busy; timed out after {timeout_seconds:g} seconds",
+                    kind="lock_timeout",
                 )
             time.sleep(0.1)
 
@@ -110,6 +164,183 @@ This is your one-time bootstrap. Respond to the request below.
 
 REQUEST:
 {prompt}"""
+
+
+def parse_token_usage(json_lines: str) -> dict[str, int] | None:
+    """Total Codex's reported token usage across a stream of `--json` events.
+
+    Every value here is model-adjacent output, so nothing is trusted by shape alone:
+    malformed lines, unrelated events, booleans, negatives and non-integers are all
+    dropped rather than coerced. Returns None when Codex reported no usable usage at
+    all - which is a different fact from Codex reporting zero, and is recorded as a
+    different value.
+    """
+    totals: dict[str, int] = {}
+    for line in json_lines.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict) or event.get("type") != "turn.completed":
+            continue
+        usage = event.get("usage")
+        if not isinstance(usage, dict):
+            continue
+        for field in TOKEN_USAGE_FIELDS:
+            value = usage.get(field)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                continue
+            totals[field] = totals.get(field, 0) + value
+    return totals or None
+
+
+def usage_baseline_path(state_dir: Path) -> Path:
+    return state_dir / "usage.json"
+
+
+def read_usage_baseline(state_dir: Path, session_id: str | None) -> dict[str, int] | None:
+    """The cumulative totals this session had reached at the end of the last call.
+
+    Returns None when the baseline is unknown - absent, unreadable, or belonging to a
+    different session. Unknown is recorded as null rather than guessed, because a
+    wrong delta is worse than a missing one.
+
+    Deliberately a separate file. Adding a field to `state.json` would need
+    STATE_VERSION bumped, and `read_session_id` fails closed on an unrecognised
+    version - which would take every existing Rex session down on upgrade.
+    """
+    if not session_id:
+        return None
+    path = usage_baseline_path(state_dir)
+    try:
+        stored = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(stored, dict) or stored.get("session_id") != session_id:
+        return None
+    totals = stored.get("totals")
+    if not isinstance(totals, dict):
+        return None
+    return {
+        field: value
+        for field, value in totals.items()
+        if field in TOKEN_USAGE_FIELDS
+        and isinstance(value, int)
+        and not isinstance(value, bool)
+        and value >= 0
+    }
+
+
+def write_usage_baseline(
+    state_dir: Path, session_id: str, totals: dict[str, int] | None
+) -> None:
+    if not totals:
+        return
+    state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    payload = json.dumps(
+        {"session_id": session_id, "totals": totals}, sort_keys=True
+    ) + "\n"
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=state_dir, prefix="usage.", suffix=".tmp", text=True
+    )
+    temporary_path = Path(temporary_name)
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, usage_baseline_path(state_dir))
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
+def invocation_log_path(state_dir: Path) -> Path:
+    return state_dir / "invocations.jsonl"
+
+
+def append_invocation_record(state_dir: Path, record: dict) -> None:
+    """Append one telemetry line, 0600, never touching state.json.
+
+    `state.json` is atomically replaced on every write and has a different lifecycle;
+    mixing an append-only log into it would make one of the two wrong.
+    """
+    state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    path = invocation_log_path(state_dir)
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    try:
+        # An existing file created under a permissive umask keeps its old mode, so
+        # set it explicitly rather than relying on the open() mode argument.
+        os.fchmod(descriptor, 0o600)
+        payload = json.dumps(record, separators=(",", ":"), sort_keys=True) + "\n"
+        os.write(descriptor, payload.encode("utf-8"))
+    finally:
+        os.close(descriptor)
+
+
+class InvocationTelemetry:
+    """Facts about one `ask()` call, accumulated as it runs.
+
+    Codex reports token usage as a running total for the whole session, not for the
+    turn. So the last attempt's numbers replace earlier ones rather than adding to
+    them: summing two attempts would double-count a resume that failed, and summing
+    across a recovery adds the dead session's lifetime total to the new session's.
+    """
+
+    def __init__(self) -> None:
+        self.started_at = datetime.now(timezone.utc)
+        self.started_monotonic = time.monotonic()
+        self.started_with_session = False
+        self.attempts = 0
+        self.recovery_attempted = False
+        self.recovery_succeeded = False
+        self.session_usage: dict[str, int] | None = None
+        # Cumulative totals this session had already reached before this call.
+        # None means unknown; zero means the session began in this call.
+        self.usage_baseline: dict[str, int] | None = None
+
+    def observe_usage(self, usage: dict[str, int] | None) -> None:
+        if usage:
+            self.session_usage = dict(usage)
+
+    def begin_attempt(self, baseline: dict[str, int] | None) -> None:
+        self.attempts += 1
+        self.usage_baseline = baseline
+        self.session_usage = None
+
+    def record(self, *, success: bool, failure_kind: str | None) -> dict:
+        usage = self.session_usage or {}
+        baseline = self.usage_baseline
+        record = {
+            "version": INVOCATION_RECORD_VERSION,
+            "started_at": self.started_at.isoformat().replace("+00:00", "Z"),
+            "duration_seconds": round(
+                time.monotonic() - self.started_monotonic, 3
+            ),
+            "success": success,
+            "started_with_session": self.started_with_session,
+            "attempts": self.attempts,
+            "recovery_attempted": self.recovery_attempted,
+            "recovery_succeeded": self.recovery_succeeded,
+            # No dollar figure. The wrapper knows no authoritative price, billing
+            # mode, or subscription allocation, and a number derived from public
+            # pricing would read as measured when it was guessed.
+            "cost_usd": None,
+            "failure_kind": failure_kind,
+        }
+        for field in TOKEN_USAGE_FIELDS:
+            total = usage.get(field)
+            record[f"session_{field}"] = total
+            if total is None or baseline is None:
+                record[f"call_{field}"] = None
+            else:
+                record[f"call_{field}"] = max(total - baseline.get(field, 0), 0)
+        return record
+
+
+def failure_kind_of(error: BaseException) -> str:
+    kind = getattr(error, "kind", None)
+    return kind if isinstance(kind, str) and kind else "codex_error"
 
 
 def parse_thread_id(json_lines: str) -> str | None:
@@ -157,7 +388,7 @@ def invoke_codex(
     state_dir: Path,
     repo_root: Path,
     codex_binary: str,
-) -> tuple[str, str]:
+) -> tuple[str, str, dict[str, int] | None]:
     descriptor, output_name = tempfile.mkstemp(
         dir=state_dir, prefix="response.", suffix=".txt", text=True
     )
@@ -171,20 +402,108 @@ def invoke_codex(
             capture_output=True,
             check=False,
         )
+        # Parsed before the exit status is checked. A resume that fails still burned
+        # tokens, and a call that recovers should report what both attempts cost
+        # rather than only the one that worked.
+        usage = parse_token_usage(result.stdout)
         if result.returncode != 0:
             detail = "\n".join(
                 part for part in (result.stderr.strip(), result.stdout.strip()) if part
             )
-            raise RexError(detail or f"Codex exited with status {result.returncode}")
+            raise RexError(
+                detail or f"Codex exited with status {result.returncode}",
+                stderr=result.stderr,
+                kind="codex_error",
+                usage=usage,
+            )
         response = output_path.read_text(encoding="utf-8").strip()
         if not response:
-            raise RexError("Codex completed without a final Rex response")
+            raise RexError(
+                "Codex completed without a final Rex response",
+                kind="empty_response",
+                usage=usage,
+            )
         resolved_id = session_id or parse_thread_id(result.stdout)
         if not resolved_id:
-            raise RexError("Codex did not report a thread ID")
-        return resolved_id, response
+            raise RexError(
+                "Codex did not report a thread ID",
+                kind="missing_thread_id",
+                usage=usage,
+            )
+        return resolved_id, response, usage
     finally:
         output_path.unlink(missing_ok=True)
+
+
+def ask_within_lock(
+    prompt: str,
+    state_dir: Path,
+    repo_root: Path,
+    codex_binary: str,
+    telemetry: InvocationTelemetry,
+) -> str:
+    session_id = read_session_id(state_dir)
+    telemetry.started_with_session = session_id is not None
+    request = prompt if session_id else bootstrap_prompt(repo_root, prompt)
+    try:
+        # A resume continues a session with a history; a bootstrap starts one at zero.
+        telemetry.begin_attempt(
+            read_usage_baseline(state_dir, session_id) if session_id else {}
+        )
+        resolved_id, response, usage = invoke_codex(
+            request, session_id, state_dir, repo_root, codex_binary
+        )
+        telemetry.observe_usage(usage)
+    except RexError as error:
+        telemetry.observe_usage(getattr(error, "usage", None))
+        if not (session_id and is_unresumable_session(error)):
+            raise
+        telemetry.recovery_attempted = True
+        clear_session_id(state_dir)
+        # The replacement session's counters start at zero, and the dead session's
+        # lifetime total is not part of what this call cost.
+        telemetry.begin_attempt({})
+        try:
+            resolved_id, response, usage = invoke_codex(
+                bootstrap_prompt(repo_root, prompt),
+                None,
+                state_dir,
+                repo_root,
+                codex_binary,
+            )
+        except RexError as replacement_error:
+            telemetry.observe_usage(getattr(replacement_error, "usage", None))
+            raise
+        telemetry.observe_usage(usage)
+        telemetry.recovery_succeeded = True
+    write_session_id(state_dir, resolved_id)
+    write_usage_baseline(state_dir, resolved_id, telemetry.session_usage)
+    return response
+
+
+def write_telemetry(
+    state_dir: Path,
+    record: dict,
+    pending_error: BaseException | None = None,
+) -> None:
+    """Persist one record.
+
+    A telemetry failure must not overwrite a real one, so when the call was already
+    failing the write error is reported on stderr and the original exception is left
+    to propagate. When the call succeeded, an unwritable record is itself a failure:
+    a pilot that cannot record its own measurements should say so rather than return
+    a clean answer and quietly measure nothing.
+    """
+    try:
+        append_invocation_record(state_dir, record)
+    except OSError as error:
+        if pending_error is not None:
+            print(f"rex: could not record invocation telemetry: {error}", file=sys.stderr)
+            return
+        raise RexError(
+            f"Rex answered but could not record invocation telemetry: {error}",
+            kind="telemetry_error",
+        ) from error
 
 
 def ask(
@@ -194,27 +513,35 @@ def ask(
     codex_binary: str,
     lock_timeout: float,
 ) -> str:
-    lock_handle = acquire_lock(state_dir, lock_timeout)
+    telemetry = InvocationTelemetry()
     try:
-        session_id = read_session_id(state_dir)
-        request = prompt if session_id else bootstrap_prompt(repo_root, prompt)
+        lock_handle = acquire_lock(state_dir, lock_timeout)
+    except RexError as error:
+        # Rejected before Codex ever started: attempts stays 0, and the record is
+        # appended without the lock. Append-only writing is what keeps that safe.
+        write_telemetry(
+            state_dir,
+            telemetry.record(success=False, failure_kind=failure_kind_of(error)),
+            pending_error=error,
+        )
+        raise
+    try:
         try:
-            resolved_id, response = invoke_codex(
-                request, session_id, state_dir, repo_root, codex_binary
+            response = ask_within_lock(
+                prompt, state_dir, repo_root, codex_binary, telemetry
             )
-        except RexError as error:
-            if session_id and SESSION_NOT_FOUND in str(error).lower():
-                clear_session_id(state_dir)
-                resolved_id, response = invoke_codex(
-                    bootstrap_prompt(repo_root, prompt),
-                    None,
-                    state_dir,
-                    repo_root,
-                    codex_binary,
-                )
-            else:
-                raise
-        write_session_id(state_dir, resolved_id)
+        except BaseException as error:
+            write_telemetry(
+                state_dir,
+                telemetry.record(success=False, failure_kind=failure_kind_of(error)),
+                pending_error=error,
+            )
+            raise
+        # Recorded before the lock is released, so a record and the session mutation
+        # it describes cannot be interleaved with another caller's.
+        write_telemetry(
+            state_dir, telemetry.record(success=True, failure_kind=None)
+        )
         return response
     finally:
         fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
