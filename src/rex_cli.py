@@ -5,12 +5,16 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import http.client
+import http.server
 import json
 import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+from contextlib import contextmanager, nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TextIO
@@ -22,6 +26,17 @@ TOKEN_USAGE_FIELDS = (
     "input_tokens",
     "cached_input_tokens",
     "output_tokens",
+)
+GITHUB_MCP_URL = "https://api.githubcopilot.com/mcp/"
+GITHUB_KEYCHAIN_ACCOUNT = "rex"
+GITHUB_KEYCHAIN_SERVICE = "com.davidhecker.rex.github-read"
+GITHUB_READ_TOOLS = (
+    "issue_read",
+    "list_issues",
+    "search_issues",
+    "pull_request_read",
+    "list_pull_requests",
+    "search_pull_requests",
 )
 
 # The two phrasings `codex exec resume` has actually been observed producing for a
@@ -81,6 +96,100 @@ def default_state_dir() -> Path:
     if override:
         return Path(override).expanduser()
     return Path.home() / "Library" / "Application Support" / "Rex"
+
+
+def read_github_token() -> str | None:
+    """Read Rex's dedicated GitHub credential without putting it in arguments."""
+    if sys.platform != "darwin":
+        return None
+    try:
+        result = subprocess.run(
+            [
+                "security",
+                "find-generic-password",
+                "-a",
+                GITHUB_KEYCHAIN_ACCOUNT,
+                "-s",
+                GITHUB_KEYCHAIN_SERVICE,
+                "-w",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
+
+
+def github_mcp_headers(incoming, token: str) -> dict[str, str]:
+    """Replace every caller-controlled GitHub MCP policy header."""
+    headers = {
+        key: value
+        for key, value in incoming.items()
+        if key.lower()
+        not in {"authorization", "connection", "host", "content-length"}
+        and not key.lower().startswith("x-mcp-")
+    }
+    headers["Authorization"] = f"Bearer {token}"
+    headers["X-MCP-Tools"] = ",".join(GITHUB_READ_TOOLS)
+    headers["X-MCP-Readonly"] = "true"
+    return headers
+
+
+@contextmanager
+def github_mcp_proxy(token: str):
+    """Keep the GitHub credential outside the Codex process and its shell tools."""
+    class ProxyHandler(http.server.BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_POST(self):
+            self._forward()
+
+        def do_GET(self):
+            self._forward()
+
+        def do_DELETE(self):
+            self._forward()
+
+        def log_message(self, _format, *args):
+            return
+
+        def _forward(self):
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length else None
+            headers = github_mcp_headers(self.headers, token)
+            connection = http.client.HTTPSConnection("api.githubcopilot.com", timeout=60)
+            try:
+                connection.request(self.command, "/mcp/", body=body, headers=headers)
+                response = connection.getresponse()
+                payload = response.read()
+                self.send_response(response.status)
+                for key, value in response.getheaders():
+                    if key.lower() not in {
+                        "connection",
+                        "content-length",
+                        "transfer-encoding",
+                    }:
+                        self.send_header(key, value)
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+            finally:
+                connection.close()
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), ProxyHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        host, port = server.server_address
+        yield f"http://{host}:{port}/mcp/"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
 
 
 def state_path(state_dir: Path) -> Path:
@@ -363,10 +472,12 @@ def codex_command(
     repo_root: Path,
     output_path: Path,
     session_id: str | None,
+    github_mcp_url: str | None = None,
 ) -> list[str]:
     command = [
         codex_binary,
         "exec",
+        "--ignore-user-config",
         "--sandbox",
         "read-only",
         "--cd",
@@ -375,6 +486,19 @@ def codex_command(
         "--output-last-message",
         str(output_path),
     ]
+    if github_mcp_url:
+        tools = ",".join(GITHUB_READ_TOOLS)
+        command.extend(
+            [
+                "--config",
+                f'mcp_servers.rex_github.url="{github_mcp_url}"',
+                "--config",
+                (
+                    "mcp_servers.rex_github.http_headers="
+                    f'{{"X-MCP-Tools"="{tools}","X-MCP-Readonly"="true"}}'
+                ),
+            ]
+        )
     if session_id:
         command.extend(["resume", session_id, "-"])
     else:
@@ -395,13 +519,22 @@ def invoke_codex(
     os.close(descriptor)
     output_path = Path(output_name)
     try:
-        result = subprocess.run(
-            codex_command(codex_binary, repo_root, output_path, session_id),
-            input=prompt,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
+        github_token = read_github_token()
+        proxy_context = github_mcp_proxy(github_token) if github_token else nullcontext(None)
+        with proxy_context as github_mcp_url:
+            result = subprocess.run(
+                codex_command(
+                    codex_binary,
+                    repo_root,
+                    output_path,
+                    session_id,
+                    github_mcp_url=github_mcp_url,
+                ),
+                input=prompt,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
         # Parsed before the exit status is checked. A resume that fails still burned
         # tokens, and a call that recovers should report what both attempts cost
         # rather than only the one that worked.

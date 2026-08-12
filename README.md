@@ -88,3 +88,15 @@ an installation: it resolves `../src/rex_cli.py` relative to its own location.
 
 Rex starts in a read-only sandbox. It can inspect, advise, review, and propose; changes
 still require a separately authorized implementation workflow.
+
+When a dedicated GitHub credential is available, the wrapper also gives Rex read-only
+access to GitHub issues and pull requests through GitHub's official remote MCP server.
+On macOS it reads the credential from the `com.davidhecker.rex.github-read` Keychain
+item for account `rex`. Use a fine-grained token restricted to
+`ShareViewLLC/ShareView` with read-only Metadata, Issues, and Pull requests permissions.
+The wrapper ignores the user's global Codex configuration and sends MCP traffic through
+a loopback proxy that holds the credential outside the Codex process. The proxy exposes
+only issue and pull-request read/list/search tools and enables GitHub's read-only mode.
+The token is unavailable to model-run shell commands and never appears in command-line
+arguments or telemetry. Without that dedicated token, GitHub access is not configured
+and Rex continues to work locally.

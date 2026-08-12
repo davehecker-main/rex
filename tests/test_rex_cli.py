@@ -8,6 +8,7 @@ import stat
 import tempfile
 import textwrap
 import unittest
+from unittest import mock
 from datetime import datetime
 from pathlib import Path
 
@@ -95,8 +96,25 @@ class RexCliTests(unittest.TestCase):
         }
         self.previous_environment = os.environ.copy()
         os.environ.update(self.environment)
+        self.github_token = None
+        self.github_token_reader = mock.patch.object(
+            rex_cli,
+            "read_github_token",
+            side_effect=lambda: self.github_token,
+        )
+        self.github_token_reader.start()
+        self.github_proxy = mock.patch.object(
+            rex_cli,
+            "github_mcp_proxy",
+            side_effect=lambda _token: rex_cli.nullcontext(
+                "http://127.0.0.1:45678/mcp/"
+            ),
+        )
+        self.github_proxy.start()
 
     def tearDown(self):
+        self.github_proxy.stop()
+        self.github_token_reader.stop()
         os.environ.clear()
         os.environ.update(self.previous_environment)
         self.temporary.cleanup()
@@ -128,6 +146,62 @@ class RexCliTests(unittest.TestCase):
         self.assertIn("one-time bootstrap", call["prompt"])
         self.assertIn("hello", call["prompt"])
         self.assertIn("read-only", call["args"])
+
+    def test_github_access_is_narrow_read_only_and_keeps_token_out_of_arguments(self):
+        token = "github_pat_secret-value"
+        self.github_token = token
+        self.assertEqual(self.invoke(), "rex response")
+        arguments = self.calls()[0]["args"]
+        joined = " ".join(arguments)
+        configs = [
+            arguments[index + 1]
+            for index, value in enumerate(arguments)
+            if value == "--config"
+        ]
+        expected_tools = ",".join(rex_cli.GITHUB_READ_TOOLS)
+        self.assertIn("--ignore-user-config", arguments)
+        self.assertIn("--sandbox read-only", joined)
+        self.assertIn(
+            'mcp_servers.rex_github.url="http://127.0.0.1:45678/mcp/"', configs
+        )
+        self.assertIn(
+            "mcp_servers.rex_github.http_headers="
+            f'{{"X-MCP-Tools"="{expected_tools}","X-MCP-Readonly"="true"}}',
+            configs,
+        )
+        self.assertNotIn(token, joined)
+
+    def test_github_mcp_is_absent_without_a_dedicated_token(self):
+        self.github_token = None
+        self.assertEqual(self.invoke(), "rex response")
+        joined = " ".join(self.calls()[0]["args"])
+        self.assertIn("--ignore-user-config", self.calls()[0]["args"])
+        self.assertNotIn("mcp_servers.rex_github", joined)
+
+    def test_github_proxy_replaces_conflicting_policy_headers(self):
+        headers = rex_cli.github_mcp_headers(
+            {
+                "authorization": "Bearer attacker",
+                "x-mcp-readonly": "false",
+                "X-MCP-Tools": "create_issue,merge_pull_request",
+                "x-mcp-toolsets": "all",
+                "Accept": "application/json",
+            },
+            "dedicated-token",
+        )
+        lowered = {key.lower(): value for key, value in headers.items()}
+        self.assertEqual(lowered["authorization"], "Bearer dedicated-token")
+        self.assertEqual(lowered["x-mcp-readonly"], "true")
+        self.assertEqual(
+            lowered["x-mcp-tools"], ",".join(rex_cli.GITHUB_READ_TOOLS)
+        )
+        self.assertNotIn("x-mcp-toolsets", lowered)
+        self.assertEqual(
+            len([key for key in headers if key.lower() == "x-mcp-readonly"]), 1
+        )
+        self.assertEqual(
+            len([key for key in headers if key.lower() == "x-mcp-tools"]), 1
+        )
 
     def test_later_call_resumes_without_bootstrap(self):
         self.invoke("first")

@@ -57,6 +57,25 @@ belong to a separately authorized implementation workflow. The wrapper does not 
 Claude general shell or filesystem access; integrations should expose only the narrow
 ability to ask Rex.
 
+GitHub access is a separate permission boundary from the filesystem sandbox. When the
+wrapper finds its dedicated credential in the macOS Keychain item
+`com.davidhecker.rex.github-read` for account `rex`, it configures GitHub's official
+remote MCP server for the Rex invocation with an allow-list of issue and pull-request
+read/list/search tools and the server's read-only filter. The token must be fine-grained,
+restricted to `ShareViewLLC/ShareView`, and grant only read access to Metadata, Issues,
+and Pull requests. Rex ignores the user's global Codex configuration so unrelated MCP
+servers and plugins are unavailable. The wrapper holds the token in a short-lived
+loopback MCP proxy outside the Codex process. The proxy fixes the upstream host, tool
+allow-list, and read-only header. The token is unavailable to model-run shell commands
+and is never written to arguments,
+state, or invocation telemetry. If it is absent, the GitHub MCP server is not
+configured.
+
+These controls are intentionally independent: Codex's read-only sandbox prevents
+filesystem mutation, the MCP read-only filter removes GitHub mutation tools, and the
+repository-scoped read-only credential makes GitHub reject writes even if a tool-filter
+regression occurred.
+
 ## Persistence
 
 The wrapper stores only transport state: a versioned session ID file and a lock file.
