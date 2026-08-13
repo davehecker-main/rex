@@ -91,6 +91,10 @@ After creation, the wrapper reads the issue back and requires the `rex` label to
 present. A missing label is a failed postcondition, while an unreadable verification is
 unknown; both retain the created issue number and URL in the audit and neither retries.
 
+The direct `comment-shareview-issue` command likewise verifies the dedicated identity
+and calls the same typed-Issue, fixed-repository, audited handler without starting
+Codex. It accepts only an issue number and comment body.
+
 Every attempted mutation writes a separate `github-mutations.jsonl` audit record in the
 Rex state directory. Records include the verified identity, operation, target, content
 digest and length, correlation ID, GitHub request ID, authorization state, and outcome;

@@ -127,3 +127,13 @@ This command verifies the dedicated identity, creates exactly one issue with the
 append-only mutation audit. It accepts no repository, owner, labels, or arbitrary
 request payload. A failed verification reports the created issue URL and never retries
 the creation.
+
+An explicitly authorized issue comment uses the same deterministic boundary:
+
+```bash
+rex comment-shareview-issue 123 --body "Comment"
+```
+
+The wrapper resolves the number through GitHub's typed Issue field, so a pull request
+with the same number is rejected. The command accepts no repository, URL, or arbitrary
+GraphQL payload and uses the same append-only mutation audit.

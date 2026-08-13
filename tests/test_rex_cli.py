@@ -403,6 +403,44 @@ class RexCliTests(unittest.TestCase):
         self.assertEqual(args.body, "Body")
         self.assertFalse(hasattr(args, "labels"))
 
+    def test_direct_issue_comment_uses_verified_identity_and_typed_handler(self):
+        self.github_token = "dedicated-token"
+        with mock.patch.object(
+            rex_cli, "verify_github_identity",
+            return_value={"login": "dr-rex-phd", "id": 316333787},
+        ) as verify, mock.patch.object(
+            rex_cli, "handle_mutation_call",
+            return_value={"result": {
+                "content": [{"type": "text", "text": json.dumps({
+                    "id": "IC_1", "url": "https://github.test/issues/12#comment-1"
+                })}],
+                "isError": False,
+            }},
+        ) as mutate:
+            comment = rex_cli.comment_shareview_issue_direct(
+                12, "Comment", self.state_dir
+            )
+        verify.assert_called_once_with("dedicated-token")
+        self.assertEqual(comment["url"], "https://github.test/issues/12#comment-1")
+        args = mutate.call_args.args
+        self.assertEqual(args[:3], (
+            "dedicated-token", self.state_dir,
+            {"login": "dr-rex-phd", "id": 316333787},
+        ))
+        self.assertFalse(args[3].available())
+        self.assertEqual(args[4]["params"], {
+            "name": rex_cli.GITHUB_COMMENT_TOOL,
+            "arguments": {"issue_number": 12, "body": "Comment"},
+        })
+
+    def test_direct_issue_comment_cli_accepts_only_number_and_body(self):
+        args = rex_cli.build_parser().parse_args([
+            "comment-shareview-issue", "12", "--body", "Comment"
+        ])
+        self.assertEqual(args.issue_number, 12)
+        self.assertEqual(args.body, "Comment")
+        self.assertFalse(hasattr(args, "repository"))
+
     def test_sse_tool_list_is_augmented_without_losing_read_tools(self):
         original = {
             "jsonrpc": "2.0",

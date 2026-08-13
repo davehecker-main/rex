@@ -66,6 +66,9 @@ boundaries; prompt wording is not authorization.
 An explicit creation may use the deterministic `create-shareview-issue` command. That
 path does not start Codex: it verifies the dedicated identity and sends one fixed,
 audited request, keeping Codex's filesystem and approval boundaries unchanged.
+Explicit issue comments may use the equivalent deterministic
+`comment-shareview-issue` command, which rejects pull requests through a typed Issue
+lookup.
 
 A clean result reported without its caveats is worse than a messy one reported
 accurately, because the first one is trusted.
