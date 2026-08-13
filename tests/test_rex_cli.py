@@ -438,10 +438,13 @@ class RexCliTests(unittest.TestCase):
         with mock.patch.object(
             rex_cli,
             "github_api",
-            return_value=(
-                {"node_id": "I_1", "html_url": "https://github.test/issues/1", "number": 1},
-                "request-id",
-            ),
+            side_effect=[
+                (
+                    {"node_id": "I_1", "html_url": "https://github.test/issues/1", "number": 1},
+                    "create-request-id",
+                ),
+                ({"labels": [{"name": "rex"}]}, "verify-request-id"),
+            ],
         ) as api:
             rex_cli.mutation_result(
                 "token",
@@ -450,8 +453,12 @@ class RexCliTests(unittest.TestCase):
                 grant,
             )
             self.assertEqual(
-                api.call_args.args[3],
+                api.call_args_list[0].args[3],
                 {"title": "Title", "body": "Body", "labels": ["rex"]},
+            )
+            self.assertEqual(
+                api.call_args_list[1].args[2],
+                "/repos/ShareViewLLC/ShareView/issues/1",
             )
             self.assertFalse(grant.available())
             with self.assertRaisesRegex(rex_cli.RexError, "not authorized"):
@@ -461,6 +468,100 @@ class RexCliTests(unittest.TestCase):
                     {"title": "Again", "body": "Body"},
                     grant,
                 )
+
+    def test_issue_creation_fails_honestly_when_rex_label_is_missing(self):
+        with mock.patch.object(
+            rex_cli,
+            "github_api",
+            side_effect=[
+                (
+                    {"node_id": "I_1", "html_url": "https://github.test/issues/1", "number": 1},
+                    "create-request-id",
+                ),
+                ({"labels": []}, "verify-request-id"),
+            ],
+        ):
+            with self.assertRaisesRegex(
+                rex_cli.GitHubMutationPostconditionError,
+                "Issue created at https://github.test/issues/1, but GitHub did not apply",
+            ) as raised:
+                rex_cli.mutation_result(
+                    "token",
+                    rex_cli.GITHUB_CREATE_TOOL,
+                    {"title": "Title", "body": "Body"},
+                    rex_cli.OneUseGrant(True),
+                )
+        self.assertEqual(raised.exception.number, 1)
+        self.assertEqual(raised.exception.kind, "github_postcondition_failed")
+
+    def test_postcondition_failure_audit_keeps_created_issue_identity(self):
+        request = {
+            "id": 10,
+            "params": {
+                "name": rex_cli.GITHUB_CREATE_TOOL,
+                "arguments": {"title": "Title", "body": "Body"},
+            },
+        }
+        error = rex_cli.GitHubMutationPostconditionError(
+            "Issue created, but rex is missing",
+            url="https://github.test/issues/1",
+            number=1,
+            request_id="create-request-id",
+            kind="github_postcondition_failed",
+        )
+        with mock.patch.object(rex_cli, "mutation_result", side_effect=error):
+            response = rex_cli.handle_mutation_call(
+                "token",
+                self.state_dir,
+                {"login": "dr-rex-phd", "id": 316333787},
+                rex_cli.OneUseGrant(True),
+                request,
+            )
+        self.assertTrue(response["result"]["isError"])
+        records = [
+            json.loads(line)
+            for line in rex_cli.mutation_audit_path(self.state_dir).read_text().splitlines()
+        ]
+        self.assertEqual(records[-1]["outcome"], "failed")
+        self.assertEqual(records[-1]["target_number"], 1)
+        self.assertEqual(records[-1]["result_url"], "https://github.test/issues/1")
+
+    def test_malformed_label_verification_is_unknown_and_keeps_created_identity(self):
+        request = {
+            "id": 11,
+            "params": {
+                "name": rex_cli.GITHUB_CREATE_TOOL,
+                "arguments": {"title": "Title", "body": "Body"},
+            },
+        }
+        with mock.patch.object(
+            rex_cli,
+            "github_api",
+            side_effect=[
+                (
+                    {"node_id": "I_1", "html_url": "https://github.test/issues/1", "number": 1},
+                    "create-request-id",
+                ),
+                ({"labels": "not-a-list"}, "verify-request-id"),
+            ],
+        ):
+            response = rex_cli.handle_mutation_call(
+                "token",
+                self.state_dir,
+                {"login": "dr-rex-phd", "id": 316333787},
+                rex_cli.OneUseGrant(True),
+                request,
+            )
+        self.assertTrue(response["result"]["isError"])
+        records = [
+            json.loads(line)
+            for line in rex_cli.mutation_audit_path(self.state_dir).read_text().splitlines()
+        ]
+        final = records[-1]
+        self.assertEqual(final["outcome"], "unknown")
+        self.assertEqual(final["target_number"], 1)
+        self.assertEqual(final["result_url"], "https://github.test/issues/1")
+        self.assertEqual(final["github_request_id"], "create-request-id")
 
     def test_issue_creation_grant_is_atomic(self):
         grant = rex_cli.OneUseGrant(True)

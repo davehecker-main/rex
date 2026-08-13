@@ -83,6 +83,18 @@ class RexError(RuntimeError):
         self.usage = usage
 
 
+class GitHubMutationPostconditionError(RexError):
+    """The mutation happened, but its required postcondition did not verify."""
+
+    def __init__(
+        self, message: str, *, url: str, number: int, request_id: str | None, kind: str
+    ) -> None:
+        super().__init__(message, kind=kind)
+        self.url = url
+        self.number = number
+        self.request_id = request_id
+
+
 class OneUseGrant:
     def __init__(self, enabled: bool = False) -> None:
         self._available = enabled
@@ -323,7 +335,43 @@ def mutation_result(token: str, name: str, arguments: dict, create_grant: OneUse
             f"/repos/{GITHUB_OWNER}/{GITHUB_REPOSITORY}/issues",
             {"title": title, "body": body, "labels": ["rex"]},
         )
-        return {"id": result["node_id"], "url": result["html_url"]}, request_id, result["number"], title + "\n" + body
+        number, url = result["number"], result["html_url"]
+        try:
+            verified, _ = github_api(
+                token,
+                "GET",
+                f"/repos/{GITHUB_OWNER}/{GITHUB_REPOSITORY}/issues/{number}",
+            )
+            if not isinstance(verified, dict) or not isinstance(
+                verified.get("labels"), list
+            ):
+                raise ValueError("GitHub returned malformed issue labels")
+            if any(
+                not isinstance(label, dict) or not isinstance(label.get("name"), str)
+                for label in verified["labels"]
+            ):
+                raise ValueError("GitHub returned a malformed issue label")
+        except Exception as error:
+            raise GitHubMutationPostconditionError(
+                f"Issue created at {url}, but the required rex label could not be verified: {error}",
+                url=url,
+                number=number,
+                request_id=request_id,
+                kind="github_postcondition_unknown",
+            ) from error
+        labels = {
+            label.get("name")
+            for label in verified["labels"]
+        }
+        if "rex" not in labels:
+            raise GitHubMutationPostconditionError(
+                f"Issue created at {url}, but GitHub did not apply the required rex label",
+                url=url,
+                number=number,
+                request_id=request_id,
+                kind="github_postcondition_failed",
+            )
+        return {"id": result["node_id"], "url": url}, request_id, number, title + "\n" + body
     raise RexError("GitHub mutation tool is not allowed", kind="github_policy_error")
 
 
@@ -375,6 +423,19 @@ def handle_mutation_call(
         }
     except Exception as error:
         record.update({"outcome": mutation_error_outcome(error), "reason": str(error)})
+        if isinstance(error, GitHubMutationPostconditionError):
+            record.update(
+                {
+                    "target_number": error.number,
+                    "github_request_id": error.request_id,
+                    "result_url": error.url,
+                    "outcome": (
+                        "failed"
+                        if error.kind == "github_postcondition_failed"
+                        else "unknown"
+                    ),
+                }
+            )
         response = {
             "jsonrpc": "2.0",
             "id": request.get("id"),

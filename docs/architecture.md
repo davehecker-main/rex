@@ -87,6 +87,9 @@ The direct `create-shareview-issue` command uses that same identity verification
 fixed request, one-use grant, and audit handler without starting Codex. This is the
 deterministic path for an explicit creation instruction; it avoids broadening Codex's
 approval or filesystem sandbox merely to authorize one GitHub mutation.
+After creation, the wrapper reads the issue back and requires the `rex` label to be
+present. A missing label is a failed postcondition, while an unreadable verification is
+unknown; both retain the created issue number and URL in the audit and neither retries.
 
 Every attempted mutation writes a separate `github-mutations.jsonl` audit record in the
 Rex state directory. Records include the verified identity, operation, target, content
