@@ -57,3 +57,11 @@ An experienced technical leader or engineer working largely alone, using Claude 
 ## Success
 
 Rex succeeds when a solo engineer can establish a disciplined AI-assisted engineering environment quickly, operate it with low cognitive overhead, observe how it performs, improve it over time, and reproduce the system on another project.
+
+## Portability invariant
+
+Rex is a portable, self-documenting engineering product. Every Rex change preserves
+the ability to load the canonical Rex repository into a new repository or project
+without depending on ShareView's files, Claude's configuration, or an unwritten
+session convention. Rex-specific behavior and setup remain documented and versioned
+with Rex itself.

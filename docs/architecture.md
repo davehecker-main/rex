@@ -120,6 +120,28 @@ Codex owns its rollout persistence. Rex promotes important decisions and operati
 knowledge into this repository because rollouts can grow, compact, or become
 unavailable. The session record is useful context, not the sole source of truth.
 
+## Project integration
+
+Rex is loaded into a project by pointing a client at the canonical checkout's
+`bin/rex mcp-server`. The client needs only the MCP `ask_rex` boundary; project files
+do not become part of Rex, and Rex does not require ShareView-specific commands,
+hooks, or documentation. Set `REX_REPO_ROOT` only when the wrapper is installed
+outside the canonical checkout. A new project may add its own thin client adapter,
+but session identity, telemetry, permissions, canonical rules, and upgrades remain
+owned by Rex.
+
+This boundary is the portability contract: integrating another project must not fork
+Rex's rules into that project or make the project responsible for Rex's state.
+
+## Invocation telemetry
+
+Each invocation appends a permission-restricted record to `invocations.jsonl` in the
+Rex state directory. `rex telemetry` summarizes measured duration, success, recovery,
+and call-level token use. It reports cached and fresh input separately and keeps
+unknown token deltas visible rather than treating them as zero. `rex telemetry --json`
+provides the same summary for local analysis. No host-project instrumentation is
+required and no prompt or response content is stored.
+
 ## Deferred components
 
 The first version does not require hosting, a daemon, SQLite, an asynchronous message

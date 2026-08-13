@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import collections
 import fcntl
 import hashlib
 import http.client
@@ -803,6 +804,105 @@ def invocation_log_path(state_dir: Path) -> Path:
     return state_dir / "invocations.jsonl"
 
 
+def read_invocation_records(state_dir: Path) -> list[dict]:
+    """Read valid invocation records without guessing through damaged lines."""
+    path = invocation_log_path(state_dir)
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return []
+    records = []
+    for line in lines:
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(record, dict):
+            records.append(record)
+    return records
+
+
+def invocation_summary(records: list[dict]) -> dict:
+    """Return measured Rex usage; unknown token deltas remain visibly unknown."""
+    durations = sorted(
+        value
+        for record in records
+        if isinstance((value := record.get("duration_seconds")), (int, float))
+        and not isinstance(value, bool)
+        and value >= 0
+    )
+    measured = [
+        record
+        for record in records
+        if isinstance(record.get("call_input_tokens"), int)
+        and not isinstance(record.get("call_input_tokens"), bool)
+    ]
+    token_totals = {
+        field: sum(
+            record.get(f"call_{field}", 0)
+            for record in measured
+            if isinstance(record.get(f"call_{field}"), int)
+            and not isinstance(record.get(f"call_{field}"), bool)
+        )
+        for field in TOKEN_USAGE_FIELDS
+    }
+    input_tokens = token_totals["input_tokens"]
+    cached_tokens = token_totals["cached_input_tokens"]
+    failures = collections.Counter(
+        record.get("failure_kind") or "unknown"
+        for record in records
+        if record.get("success") is not True
+    )
+    return {
+        "records": len(records),
+        "successful": sum(record.get("success") is True for record in records),
+        "failed": sum(record.get("success") is not True for record in records),
+        "failure_kinds": dict(sorted(failures.items())),
+        "recovery_attempts": sum(
+            record.get("recovery_attempted") is True for record in records
+        ),
+        "measured_token_calls": len(measured),
+        "unknown_token_calls": len(records) - len(measured),
+        "duration_seconds": {
+            "total": round(sum(durations), 3),
+            "median": durations[len(durations) // 2] if durations else None,
+            "maximum": durations[-1] if durations else None,
+        },
+        "tokens": {
+            "input": input_tokens,
+            "cached_input": cached_tokens,
+            "fresh_input": max(input_tokens - cached_tokens, 0),
+            "output": token_totals["output_tokens"],
+            "cache_ratio": round(cached_tokens / input_tokens, 4)
+            if input_tokens
+            else None,
+        },
+    }
+
+
+def format_invocation_summary(summary: dict) -> str:
+    duration = summary["duration_seconds"]
+    tokens = summary["tokens"]
+    ratio = (
+        f"{tokens['cache_ratio']:.1%}" if tokens["cache_ratio"] is not None else "unknown"
+    )
+    return "\n".join(
+        [
+            f"Invocations: {summary['records']} "
+            f"({summary['successful']} successful, {summary['failed']} failed)",
+            f"Token measurement: {summary['measured_token_calls']} measured, "
+            f"{summary['unknown_token_calls']} unknown",
+            f"Input tokens: {tokens['input']} total, {tokens['cached_input']} cached, "
+            f"{tokens['fresh_input']} fresh ({ratio} cache ratio)",
+            f"Output tokens: {tokens['output']}",
+            f"Duration: {duration['total']:.3f}s total, "
+            f"{duration['median'] if duration['median'] is not None else 'unknown'}s median, "
+            f"{duration['maximum'] if duration['maximum'] is not None else 'unknown'}s maximum",
+            f"Recovery attempts: {summary['recovery_attempts']}",
+        ]
+    )
+
+
 def append_invocation_record(state_dir: Path, record: dict) -> None:
     """Append one telemetry line, 0600, never touching state.json.
 
@@ -1270,6 +1370,12 @@ def build_parser() -> argparse.ArgumentParser:
     comment_parser.add_argument("issue_number", type=int, help="ShareView issue number")
     comment_parser.add_argument("--body", required=True, help="comment body")
     subparsers.add_parser("status", help="show the persistent Rex session ID")
+    telemetry_parser = subparsers.add_parser(
+        "telemetry", help="summarize Rex invocation time, tokens, failures, and recovery"
+    )
+    telemetry_parser.add_argument(
+        "--json", action="store_true", help="emit the summary as machine-readable JSON"
+    )
     subparsers.add_parser("mcp-server", help="serve ask_rex over MCP stdio")
     return parser
 
@@ -1287,6 +1393,13 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
             print("Rex has not been started yet.")
             return 1
+        if args.command == "telemetry":
+            summary = invocation_summary(read_invocation_records(state_dir))
+            if args.json:
+                print(json.dumps(summary, sort_keys=True))
+            else:
+                print(format_invocation_summary(summary))
+            return 0
         if args.command == "mcp-server":
             return serve_mcp(sys.stdin, sys.stdout)
         if args.command == "create-shareview-issue":

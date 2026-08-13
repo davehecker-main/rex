@@ -756,6 +756,65 @@ class RexCliTests(unittest.TestCase):
         )
         self.assertEqual(mode, 0o600)
 
+    def test_telemetry_summary_separates_cached_and_fresh_input(self):
+        records = [
+            {
+                "success": True,
+                "duration_seconds": 4.0,
+                "call_input_tokens": 100,
+                "call_cached_input_tokens": 80,
+                "call_output_tokens": 10,
+                "recovery_attempted": False,
+            },
+            {
+                "success": False,
+                "failure_kind": "codex_error",
+                "duration_seconds": 6.0,
+                "call_input_tokens": 50,
+                "call_cached_input_tokens": 20,
+                "call_output_tokens": 5,
+                "recovery_attempted": True,
+            },
+            {"success": True, "duration_seconds": 2.0, "call_input_tokens": None},
+        ]
+        summary = rex_cli.invocation_summary(records)
+        self.assertEqual(summary["records"], 3)
+        self.assertEqual(summary["measured_token_calls"], 2)
+        self.assertEqual(summary["unknown_token_calls"], 1)
+        self.assertEqual(summary["failure_kinds"], {"codex_error": 1})
+        self.assertEqual(summary["recovery_attempts"], 1)
+        self.assertEqual(summary["duration_seconds"]["median"], 4.0)
+        self.assertEqual(summary["tokens"]["input"], 150)
+        self.assertEqual(summary["tokens"]["cached_input"], 100)
+        self.assertEqual(summary["tokens"]["fresh_input"], 50)
+        self.assertEqual(summary["tokens"]["output"], 15)
+        self.assertEqual(summary["tokens"]["cache_ratio"], 0.6667)
+
+    def test_telemetry_summary_handles_no_records(self):
+        summary = rex_cli.invocation_summary([])
+        self.assertEqual(summary["records"], 0)
+        self.assertIsNone(summary["duration_seconds"]["median"])
+        self.assertIsNone(summary["tokens"]["cache_ratio"])
+
+    def test_invocation_reader_skips_malformed_lines(self):
+        self.state_dir.mkdir()
+        rex_cli.invocation_log_path(self.state_dir).write_text(
+            '{"success":true}\nnot-json\n[]\n', encoding="utf-8"
+        )
+        self.assertEqual(
+            rex_cli.read_invocation_records(self.state_dir), [{"success": True}]
+        )
+
+    def test_telemetry_command_reads_only_rex_owned_state(self):
+        self.invoke("measure this")
+        output = io.StringIO()
+        with mock.patch.object(rex_cli, "default_state_dir", return_value=self.state_dir):
+            with mock.patch("sys.stdout", output):
+                self.assertEqual(rex_cli.main(["telemetry", "--json"]), 0)
+        summary = json.loads(output.getvalue())
+        self.assertEqual(summary["records"], 1)
+        self.assertEqual(summary["tokens"]["fresh_input"], 60)
+
     def test_resume_records_started_with_session(self):
         self.invoke("first")
         self.invoke("second")

@@ -4,9 +4,10 @@ Rex is a personal AI engineering operating system: the written rules, practices,
 working agreements that let one engineer use Claude Code to build and continuously
 improve high-quality software.
 
-Rex is not a product, a framework, or a tool to install. It is a repository of
-decisions. The value is that the decisions are written down, versioned, and applied
-consistently instead of being re-derived in every session.
+Rex is a portable, self-documenting engineering product built from a repository of
+decisions plus the narrow tooling that applies them. Its value is that the decisions
+and integration contract are written down, versioned, and reusable instead of being
+re-derived in every session or copied into one host project.
 
 ## Read these first
 
@@ -75,11 +76,27 @@ Use Rex from this checkout:
 ```bash
 ./bin/rex ask "What should I work on next?"
 ./bin/rex status
+./bin/rex telemetry
 ./bin/rex mcp-server
 ```
 
 `ask` is the interactive CLI path. Agent clients start `mcp-server` and call its
-`ask_rex` tool.
+`ask_rex` tool. `telemetry` summarizes Rex's own time, tokens, failures, and recovery;
+add `--json` for machine-readable output.
+
+## Load Rex into another project
+
+Keep one canonical Rex checkout. Configure the new project's MCP client to run:
+
+```text
+/absolute/path/to/rex/bin/rex mcp-server
+```
+
+Then have the project's thin adapter call the single `ask_rex` tool. Do not copy Rex's
+canonical docs, state, telemetry, or session identity into the host repository. This
+same boundary works for ShareView and future projects: Rex owns its operating system;
+the project owns only how its client invokes Rex. See `docs/architecture.md` for the
+portability contract.
 
 The wrapper expects `bin/rex` and `src/rex_cli.py` to retain their repository-relative
 layout. For ShareView, set `REX_BIN` to the absolute path of this checkout's `bin/rex`,
