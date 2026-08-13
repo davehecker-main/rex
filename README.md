@@ -88,3 +88,52 @@ an installation: it resolves `../src/rex_cli.py` relative to its own location.
 
 Rex starts in a read-only sandbox. It can inspect, advise, review, and propose; changes
 still require a separately authorized implementation workflow.
+
+When the dedicated `dr-rex-phd` GitHub credential is available, the wrapper gives Rex
+read access to GitHub issues and pull requests plus the ability to comment on ShareView
+issues. Pull-request comments and every other mutation remain unavailable.
+On macOS it reads the credential from the `com.davidhecker.rex.github-read` Keychain
+item for account `rex`. Use a fine-grained token restricted to
+`ShareViewLLC/ShareView` with Metadata read, Pull requests read, and Issues read/write.
+The wrapper ignores the user's global Codex configuration and sends MCP traffic through
+a loopback proxy that holds the credential outside the Codex process. The proxy exposes
+only issue and pull-request read/list/search tools plus a fixed issue-comment tool. The
+comment path resolves a typed Issue before mutation, so it rejects pull requests.
+The token is unavailable to model-run shell commands and never appears in command-line
+arguments or telemetry. Without that dedicated token, GitHub access is not configured
+and Rex continues to work locally.
+
+Issue creation is a separate, one-use capability available only from a direct local
+invocation:
+
+```bash
+rex ask --allow-shareview-issue-create "Create the issue we discussed"
+```
+
+The flag exposes one fixed ShareView issue-creation tool for that invocation and is not
+available through `rex mcp-server`. Every created issue receives the `rex` label; the
+model cannot omit or replace it. Every attempted mutation is recorded in the
+permission-restricted Rex state directory without storing the token or request body.
+
+For a deterministic, explicitly authorized creation that does not place Codex in the
+write path, use:
+
+```bash
+rex create-shareview-issue --title "Title" --body "Body"
+```
+
+This command verifies the dedicated identity, creates exactly one issue with the fixed
+`rex` label, reads the created issue back to verify that label, and uses the same
+append-only mutation audit. It accepts no repository, owner, labels, or arbitrary
+request payload. A failed verification reports the created issue URL and never retries
+the creation.
+
+An explicitly authorized issue comment uses the same deterministic boundary:
+
+```bash
+rex comment-shareview-issue 123 --body "Comment"
+```
+
+The wrapper resolves the number through GitHub's typed Issue field, so a pull request
+with the same number is rejected. The command accepts no repository, URL, or arbitrary
+GraphQL payload and uses the same append-only mutation audit.
