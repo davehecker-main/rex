@@ -112,15 +112,15 @@ A change is done when:
 
 Steps 1 through 4 are Claude's to complete before asking. Step 5 is not delegable.
 
-## Not decided yet
+## Portability and measurement
 
-Sprint 0 establishes the foundation and stops there. The following are genuinely open,
-and are listed so they are recognized as unanswered rather than quietly invented the
-first time they come up:
+Rex remains one canonical, self-documenting product when it is loaded into another
+project. The host project supplies only a thin client for the `ask_rex` MCP boundary;
+Rex keeps ownership of its rules, state, telemetry, permissions, and upgrades.
+`docs/architecture.md` owns that integration contract.
 
-- How Rex's rules get applied to a project that is not Rex.
-- How to tell whether Rex is working — what gets measured, and how often it is reviewed.
-
-Each of these becomes a decision when there is real experience to base it on. Until
-then, the honest answer is that it is not decided, and the simplest reasonable thing is
-done in the moment.
+Rex measures its own invocation duration, success, recovery, and call-level token use.
+The `rex telemetry` summary separates cached from fresh input and preserves unknown
+measurements as unknown. These measurements describe Rex's operation, not individual
+productivity or the host project's total engineering leverage. Review cadence and any
+additional measurement are introduced only when a concrete decision needs them.

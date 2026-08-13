@@ -796,6 +796,15 @@ class RexCliTests(unittest.TestCase):
         self.assertIsNone(summary["duration_seconds"]["median"])
         self.assertIsNone(summary["tokens"]["cache_ratio"])
 
+    def test_telemetry_summary_uses_the_statistical_median(self):
+        summary = rex_cli.invocation_summary(
+            [
+                {"duration_seconds": 2.0},
+                {"duration_seconds": 8.0},
+            ]
+        )
+        self.assertEqual(summary["duration_seconds"]["median"], 5.0)
+
     def test_invocation_reader_skips_malformed_lines(self):
         self.state_dir.mkdir()
         rex_cli.invocation_log_path(self.state_dir).write_text(

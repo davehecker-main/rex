@@ -12,6 +12,7 @@ import http.server
 import json
 import os
 import secrets
+import statistics
 import subprocess
 import sys
 import tempfile
@@ -865,7 +866,7 @@ def invocation_summary(records: list[dict]) -> dict:
         "unknown_token_calls": len(records) - len(measured),
         "duration_seconds": {
             "total": round(sum(durations), 3),
-            "median": durations[len(durations) // 2] if durations else None,
+            "median": statistics.median(durations) if durations else None,
             "maximum": durations[-1] if durations else None,
         },
         "tokens": {
