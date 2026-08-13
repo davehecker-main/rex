@@ -3,6 +3,9 @@
 The charter says why Rex exists. The constitution says what Rex will not do. This
 document says how a change actually gets made.
 
+`docs/workflow.md` owns the mandatory Git and GitHub procedure. If this overview and
+that procedure differ, the workflow document wins.
+
 It describes the workflow as it runs today, with one engineer and Claude Code. It is
 short on purpose: anything written here is something that has to hold every time.
 
@@ -48,9 +51,24 @@ rather than an aspiration.
 **The engineer** sets scope, decides tradeoffs, and merges. Approving a change is a
 real act of judgment, not a formality performed on work already treated as finished.
 
-**Claude Code** executes inside the stated scope: writes the change, verifies it, and
-reports what happened — including what failed, what was skipped, and what is uncertain.
+**Coding agents, including Rex, Codex, and Claude Code,** execute inside the stated
+scope: write the change, verify it, and report what happened — including what failed,
+what was skipped, and what is uncertain.
 It surfaces decisions rather than absorbing them, and it does not merge its own work.
+
+Rex's GitHub identity is always the dedicated `dr-rex-phd` account. It is read-only
+except for two ShareView issue operations: Rex may comment on an existing issue, and he
+may create one only during a direct local invocation where Dave explicitly supplies the
+one-use creation flag. Rex never comments on pull requests and performs no other GitHub
+mutation. Every issue Rex creates carries the `rex` label. The wrapper enforces these
+boundaries; prompt wording is not authorization.
+
+An explicit creation may use the deterministic `create-shareview-issue` command. That
+path does not start Codex: it verifies the dedicated identity and sends one fixed,
+audited request, keeping Codex's filesystem and approval boundaries unchanged.
+Explicit issue comments may use the equivalent deterministic
+`comment-shareview-issue` command, which rejects pull requests through a typed Issue
+lookup.
 
 A clean result reported without its caveats is worse than a messy one reported
 accurately, because the first one is trusted.
@@ -100,7 +118,6 @@ Sprint 0 establishes the foundation and stops there. The following are genuinely
 and are listed so they are recognized as unanswered rather than quietly invented the
 first time they come up:
 
-- What automation, if any, runs against this repository.
 - How Rex's rules get applied to a project that is not Rex.
 - How to tell whether Rex is working — what gets measured, and how often it is reviewed.
 

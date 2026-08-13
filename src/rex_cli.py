@@ -5,12 +5,18 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import hashlib
+import http.client
+import http.server
 import json
 import os
+import secrets
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+from contextlib import contextmanager, nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TextIO
@@ -23,6 +29,23 @@ TOKEN_USAGE_FIELDS = (
     "cached_input_tokens",
     "output_tokens",
 )
+GITHUB_MCP_URL = "https://api.githubcopilot.com/mcp/"
+GITHUB_KEYCHAIN_ACCOUNT = "rex"
+GITHUB_KEYCHAIN_SERVICE = "com.davidhecker.rex.github-read"
+GITHUB_EXPECTED_LOGIN = "dr-rex-phd"
+GITHUB_EXPECTED_USER_ID = 316333787
+GITHUB_OWNER = "ShareViewLLC"
+GITHUB_REPOSITORY = "ShareView"
+GITHUB_READ_TOOLS = (
+    "issue_read",
+    "list_issues",
+    "search_issues",
+    "pull_request_read",
+    "list_pull_requests",
+    "search_pull_requests",
+)
+GITHUB_COMMENT_TOOL = "comment_on_shareview_issue"
+GITHUB_CREATE_TOOL = "create_shareview_issue"
 
 # The two phrasings `codex exec resume` has actually been observed producing for a
 # session it cannot resume. Both are measured, not guessed: "session not found for
@@ -60,6 +83,35 @@ class RexError(RuntimeError):
         self.usage = usage
 
 
+class GitHubMutationPostconditionError(RexError):
+    """The mutation happened, but its required postcondition did not verify."""
+
+    def __init__(
+        self, message: str, *, url: str, number: int, request_id: str | None, kind: str
+    ) -> None:
+        super().__init__(message, kind=kind)
+        self.url = url
+        self.number = number
+        self.request_id = request_id
+
+
+class OneUseGrant:
+    def __init__(self, enabled: bool = False) -> None:
+        self._available = enabled
+        self._lock = threading.Lock()
+
+    def available(self) -> bool:
+        with self._lock:
+            return self._available
+
+    def consume(self) -> bool:
+        with self._lock:
+            if not self._available:
+                return False
+            self._available = False
+            return True
+
+
 def is_unresumable_session(error: BaseException) -> bool:
     """True when Codex's diagnostics say the stored session no longer exists.
 
@@ -81,6 +133,498 @@ def default_state_dir() -> Path:
     if override:
         return Path(override).expanduser()
     return Path.home() / "Library" / "Application Support" / "Rex"
+
+
+def read_github_token() -> str | None:
+    """Read Rex's dedicated GitHub credential without putting it in arguments."""
+    if sys.platform != "darwin":
+        return None
+    try:
+        result = subprocess.run(
+            [
+                "security",
+                "find-generic-password",
+                "-a",
+                GITHUB_KEYCHAIN_ACCOUNT,
+                "-s",
+                GITHUB_KEYCHAIN_SERVICE,
+                "-w",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
+
+
+def github_mcp_headers(incoming, token: str) -> dict[str, str]:
+    """Replace every caller-controlled GitHub MCP policy header."""
+    headers = {
+        key: value
+        for key, value in incoming.items()
+        if key.lower()
+        not in {"authorization", "connection", "host", "content-length"}
+        and not key.lower().startswith("x-mcp-")
+    }
+    headers["Authorization"] = f"Bearer {token}"
+    headers["X-MCP-Tools"] = ",".join(GITHUB_READ_TOOLS)
+    headers["X-MCP-Readonly"] = "true"
+    return headers
+
+
+def github_api(token: str, method: str, path: str, payload: dict | None = None):
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "rex-github-boundary",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    body = None
+    if payload is not None:
+        body = json.dumps(payload).encode()
+        headers["Content-Type"] = "application/json"
+    connection = http.client.HTTPSConnection("api.github.com", timeout=60)
+    try:
+        connection.request(method, path, body=body, headers=headers)
+        response = connection.getresponse()
+        raw = response.read()
+        data = json.loads(raw) if raw else None
+        if response.status < 200 or response.status >= 300:
+            raise RexError(
+                f"GitHub request failed ({response.status}): "
+                f"{data.get('message', 'unknown error') if isinstance(data, dict) else 'unknown error'}",
+                kind="github_error",
+            )
+        return data, response.getheader("X-GitHub-Request-Id")
+    finally:
+        connection.close()
+
+
+def verify_github_identity(token: str) -> dict:
+    identity, _ = github_api(token, "GET", "/user")
+    if (
+        not isinstance(identity, dict)
+        or str(identity.get("login", "")).lower() != GITHUB_EXPECTED_LOGIN
+        or identity.get("id") != GITHUB_EXPECTED_USER_ID
+    ):
+        raise RexError(
+            f"Rex GitHub credential is not {GITHUB_EXPECTED_LOGIN}",
+            kind="github_identity_error",
+        )
+    return identity
+
+
+def mutation_audit_path(state_dir: Path) -> Path:
+    return state_dir / "github-mutations.jsonl"
+
+
+def audit_mutation(state_dir: Path, record: dict) -> None:
+    state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    path = mutation_audit_path(state_dir)
+    descriptor = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    with os.fdopen(descriptor, "a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n")
+
+
+def mutation_error_outcome(error: Exception) -> str:
+    if isinstance(error, RexError) and error.kind == "github_policy_error":
+        return "denied"
+    if isinstance(error, RexError) and error.kind == "github_error":
+        return "failed"
+    return "unknown"
+
+
+def custom_tool_definitions(allow_issue_create: bool) -> list[dict]:
+    tools = [
+        {
+            "name": GITHUB_COMMENT_TOOL,
+            "description": "Add a comment to an existing ShareView issue; pull requests are rejected",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "issue_number": {"type": "integer", "minimum": 1},
+                    "body": {"type": "string", "minLength": 1},
+                },
+                "required": ["issue_number", "body"],
+                "additionalProperties": False,
+            },
+        }
+    ]
+    if allow_issue_create:
+        tools.append(
+            {
+                "name": GITHUB_CREATE_TOOL,
+                "description": "Create one ShareView issue for this explicitly authorized invocation",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string", "minLength": 1},
+                        "body": {"type": "string"},
+                    },
+                    "required": ["title", "body"],
+                    "additionalProperties": False,
+                },
+            }
+        )
+    return tools
+
+
+def augment_tool_list(payload: bytes, allow_issue_create: bool) -> bytes:
+    additions = custom_tool_definitions(allow_issue_create)
+
+    def augment(document: dict) -> dict:
+        document.get("result", {}).setdefault("tools", []).extend(additions)
+        return document
+
+    try:
+        return json.dumps(augment(json.loads(payload))).encode()
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        lines = payload.decode().splitlines()
+        changed = False
+        for index, line in enumerate(lines):
+            if not line.startswith("data:"):
+                continue
+            try:
+                document = json.loads(line[5:].strip())
+            except json.JSONDecodeError:
+                continue
+            if isinstance(document, dict) and "result" in document:
+                lines[index] = "data: " + json.dumps(augment(document), separators=(",", ":"))
+                changed = True
+        if not changed:
+            raise RexError("GitHub MCP returned an unreadable tool list", kind="github_error")
+        return ("\n".join(lines) + "\n").encode()
+
+
+def mutation_result(token: str, name: str, arguments: dict, create_grant: OneUseGrant):
+    if name == GITHUB_COMMENT_TOOL:
+        number = arguments.get("issue_number")
+        body = arguments.get("body")
+        if not isinstance(number, int) or number < 1 or not isinstance(body, str) or not body:
+            raise RexError("Invalid issue comment arguments", kind="github_policy_error")
+        issue, _ = github_api(
+            token,
+            "POST",
+            "/graphql",
+            {"query": "query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){issue(number:$number){id url}}}", "variables": {"owner": GITHUB_OWNER, "repo": GITHUB_REPOSITORY, "number": number}},
+        )
+        target = issue.get("data", {}).get("repository", {}).get("issue")
+        if not target:
+            raise RexError("Target is not a ShareView issue", kind="github_policy_error")
+        result, request_id = github_api(
+            token,
+            "POST",
+            "/graphql",
+            {"query": "mutation($id:ID!,$body:String!){addComment(input:{subjectId:$id,body:$body}){commentEdge{node{id url}}}}", "variables": {"id": target["id"], "body": body}},
+        )
+        node = result["data"]["addComment"]["commentEdge"]["node"]
+        return node, request_id, number, body
+    if name == GITHUB_CREATE_TOOL:
+        if not create_grant.consume():
+            raise RexError("Issue creation is not authorized for this invocation", kind="github_policy_error")
+        title, body = arguments.get("title"), arguments.get("body")
+        if not isinstance(title, str) or not title or not isinstance(body, str):
+            raise RexError("Invalid issue creation arguments", kind="github_policy_error")
+        result, request_id = github_api(
+            token,
+            "POST",
+            f"/repos/{GITHUB_OWNER}/{GITHUB_REPOSITORY}/issues",
+            {"title": title, "body": body, "labels": ["rex"]},
+        )
+        number, url = result["number"], result["html_url"]
+        try:
+            verified, _ = github_api(
+                token,
+                "GET",
+                f"/repos/{GITHUB_OWNER}/{GITHUB_REPOSITORY}/issues/{number}",
+            )
+            if not isinstance(verified, dict) or not isinstance(
+                verified.get("labels"), list
+            ):
+                raise ValueError("GitHub returned malformed issue labels")
+            if any(
+                not isinstance(label, dict) or not isinstance(label.get("name"), str)
+                for label in verified["labels"]
+            ):
+                raise ValueError("GitHub returned a malformed issue label")
+        except Exception as error:
+            raise GitHubMutationPostconditionError(
+                f"Issue created at {url}, but the required rex label could not be verified: {error}",
+                url=url,
+                number=number,
+                request_id=request_id,
+                kind="github_postcondition_unknown",
+            ) from error
+        labels = {
+            label.get("name")
+            for label in verified["labels"]
+        }
+        if "rex" not in labels:
+            raise GitHubMutationPostconditionError(
+                f"Issue created at {url}, but GitHub did not apply the required rex label",
+                url=url,
+                number=number,
+                request_id=request_id,
+                kind="github_postcondition_failed",
+            )
+        return {"id": result["node_id"], "url": url}, request_id, number, title + "\n" + body
+    raise RexError("GitHub mutation tool is not allowed", kind="github_policy_error")
+
+
+def handle_mutation_call(
+    token: str,
+    state_dir: Path,
+    identity: dict,
+    create_grant: OneUseGrant,
+    request: dict,
+) -> dict:
+    params = request.get("params", {})
+    name = params.get("name")
+    arguments = params.get("arguments", {})
+    correlation_id = secrets.token_hex(16)
+    record = {
+        "correlation_id": correlation_id,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "login": identity["login"],
+        "user_id": identity["id"],
+        "operation": name,
+        "repository": f"{GITHUB_OWNER}/{GITHUB_REPOSITORY}",
+        "authorized_create": create_grant.available(),
+        "body_sha256": hashlib.sha256(
+            json.dumps(arguments, sort_keys=True).encode()
+        ).hexdigest(),
+        "outcome": "attempted",
+    }
+    audit_mutation(state_dir, record)
+    try:
+        result, request_id, number, content = mutation_result(
+            token, name, arguments, create_grant
+        )
+        record.update(
+            {
+                "outcome": "success",
+                "target_number": number,
+                "github_request_id": request_id,
+                "result_url": result["url"],
+                "content_length": len(content),
+            }
+        )
+        response = {
+            "jsonrpc": "2.0",
+            "id": request.get("id"),
+            "result": {
+                "content": [{"type": "text", "text": json.dumps(result)}],
+                "isError": False,
+            },
+        }
+    except Exception as error:
+        record.update({"outcome": mutation_error_outcome(error), "reason": str(error)})
+        if isinstance(error, GitHubMutationPostconditionError):
+            record.update(
+                {
+                    "target_number": error.number,
+                    "github_request_id": error.request_id,
+                    "result_url": error.url,
+                    "outcome": (
+                        "failed"
+                        if error.kind == "github_postcondition_failed"
+                        else "unknown"
+                    ),
+                }
+            )
+        response = {
+            "jsonrpc": "2.0",
+            "id": request.get("id"),
+            "result": {
+                "content": [{"type": "text", "text": str(error)}],
+                "isError": True,
+            },
+        }
+    finally:
+        try:
+            audit_mutation(state_dir, record)
+        except OSError as audit_error:
+            response["result"]["content"].append(
+                {
+                    "type": "text",
+                    "text": (
+                        "Audit finalization failed; preliminary record "
+                        f"{correlation_id} remains unresolved: {audit_error}"
+                    ),
+                }
+            )
+    return response
+
+
+def create_shareview_issue_direct(title: str, body: str, state_dir: Path) -> dict:
+    """Create one fixed-policy ShareView issue without placing Codex in the write path."""
+    token = read_github_token()
+    if not token:
+        raise RexError("Rex GitHub credential is not configured", kind="github_identity_error")
+    identity = verify_github_identity(token)
+    request = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "params": {
+            "name": GITHUB_CREATE_TOOL,
+            "arguments": {"title": title, "body": body},
+        },
+    }
+    response = handle_mutation_call(
+        token, state_dir, identity, OneUseGrant(True), request
+    )
+    result = response.get("result", {})
+    content = result.get("content", [])
+    if result.get("isError") or not content:
+        detail = content[0].get("text") if content else "Issue creation failed"
+        raise RexError(detail, kind="github_error")
+    try:
+        created = json.loads(content[0]["text"])
+    except (KeyError, TypeError, json.JSONDecodeError) as error:
+        raise RexError(
+            "GitHub issue creation returned an unreadable result", kind="github_error"
+        ) from error
+    if not isinstance(created, dict) or not isinstance(created.get("url"), str):
+        raise RexError(
+            "GitHub issue creation returned an incomplete result", kind="github_error"
+        )
+    if len(content) > 1:
+        warnings = "; ".join(
+            item.get("text", "unknown warning")
+            for item in content[1:]
+            if isinstance(item, dict)
+        )
+        raise RexError(
+            f"Issue created at {created['url']}, but completion is unresolved: {warnings}",
+            kind="github_audit_error",
+        )
+    return created
+
+
+def comment_shareview_issue_direct(
+    issue_number: int, body: str, state_dir: Path
+) -> dict:
+    """Comment on one typed ShareView issue without placing Codex in the write path."""
+    token = read_github_token()
+    if not token:
+        raise RexError("Rex GitHub credential is not configured", kind="github_identity_error")
+    identity = verify_github_identity(token)
+    request = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "params": {
+            "name": GITHUB_COMMENT_TOOL,
+            "arguments": {"issue_number": issue_number, "body": body},
+        },
+    }
+    response = handle_mutation_call(
+        token, state_dir, identity, OneUseGrant(False), request
+    )
+    result = response.get("result", {})
+    content = result.get("content", [])
+    if result.get("isError") or not content:
+        detail = content[0].get("text") if content else "Issue comment failed"
+        raise RexError(detail, kind="github_error")
+    try:
+        comment = json.loads(content[0]["text"])
+    except (KeyError, TypeError, json.JSONDecodeError) as error:
+        raise RexError(
+            "GitHub issue comment returned an unreadable result", kind="github_error"
+        ) from error
+    if not isinstance(comment, dict) or not isinstance(comment.get("url"), str):
+        raise RexError(
+            "GitHub issue comment returned an incomplete result", kind="github_error"
+        )
+    if len(content) > 1:
+        warnings = "; ".join(
+            item.get("text", "unknown warning")
+            for item in content[1:]
+            if isinstance(item, dict)
+        )
+        raise RexError(
+            f"Comment created at {comment['url']}, but completion is unresolved: {warnings}",
+            kind="github_audit_error",
+        )
+    return comment
+
+
+@contextmanager
+def github_mcp_proxy(token: str, state_dir: Path, create_grant: OneUseGrant):
+    """Keep the GitHub credential outside the Codex process and its shell tools."""
+    class ProxyHandler(http.server.BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_POST(self):
+            self._forward()
+
+        def do_GET(self):
+            self._forward()
+
+        def do_DELETE(self):
+            self._forward()
+
+        def log_message(self, _format, *args):
+            return
+
+        def _forward(self):
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length else None
+            request = json.loads(body) if body else None
+            if isinstance(request, dict) and request.get("method") == "tools/call":
+                params = request.get("params", {})
+                name = params.get("name")
+                if name in {GITHUB_COMMENT_TOOL, GITHUB_CREATE_TOOL}:
+                    response_payload = handle_mutation_call(
+                        token, state_dir, identity, create_grant, request
+                    )
+                    encoded = json.dumps(response_payload).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(encoded)))
+                    self.end_headers()
+                    self.wfile.write(encoded)
+                    return
+            headers = github_mcp_headers(self.headers, token)
+            connection = http.client.HTTPSConnection("api.githubcopilot.com", timeout=60)
+            try:
+                connection.request(self.command, "/mcp/", body=body, headers=headers)
+                response = connection.getresponse()
+                payload = response.read()
+                if isinstance(request, dict) and request.get("method") == "tools/list" and response.status == 200:
+                    payload = augment_tool_list(payload, create_grant.available())
+                self.send_response(response.status)
+                for key, value in response.getheaders():
+                    if key.lower() not in {
+                        "connection",
+                        "content-length",
+                        "transfer-encoding",
+                    }:
+                        self.send_header(key, value)
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+            finally:
+                connection.close()
+
+    class QuietThreadingHTTPServer(http.server.ThreadingHTTPServer):
+        def handle_error(self, _request, _client_address):
+            return
+
+    identity = verify_github_identity(token)
+    server = QuietThreadingHTTPServer(("127.0.0.1", 0), ProxyHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        host, port = server.server_address
+        yield f"http://{host}:{port}/mcp/"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
 
 
 def state_path(state_dir: Path) -> Path:
@@ -363,10 +907,12 @@ def codex_command(
     repo_root: Path,
     output_path: Path,
     session_id: str | None,
+    github_mcp_url: str | None = None,
 ) -> list[str]:
     command = [
         codex_binary,
         "exec",
+        "--ignore-user-config",
         "--sandbox",
         "read-only",
         "--cd",
@@ -375,6 +921,19 @@ def codex_command(
         "--output-last-message",
         str(output_path),
     ]
+    if github_mcp_url:
+        tools = ",".join(GITHUB_READ_TOOLS)
+        command.extend(
+            [
+                "--config",
+                f'mcp_servers.rex_github.url="{github_mcp_url}"',
+                "--config",
+                (
+                    "mcp_servers.rex_github.http_headers="
+                    f'{{"X-MCP-Tools"="{tools}","X-MCP-Readonly"="true"}}'
+                ),
+            ]
+        )
     if session_id:
         command.extend(["resume", session_id, "-"])
     else:
@@ -388,6 +947,7 @@ def invoke_codex(
     state_dir: Path,
     repo_root: Path,
     codex_binary: str,
+    create_grant: OneUseGrant | None = None,
 ) -> tuple[str, str, dict[str, int] | None]:
     descriptor, output_name = tempfile.mkstemp(
         dir=state_dir, prefix="response.", suffix=".txt", text=True
@@ -395,13 +955,26 @@ def invoke_codex(
     os.close(descriptor)
     output_path = Path(output_name)
     try:
-        result = subprocess.run(
-            codex_command(codex_binary, repo_root, output_path, session_id),
-            input=prompt,
-            text=True,
-            capture_output=True,
-            check=False,
+        github_token = read_github_token()
+        proxy_context = (
+            github_mcp_proxy(github_token, state_dir, create_grant or OneUseGrant())
+            if github_token
+            else nullcontext(None)
         )
+        with proxy_context as github_mcp_url:
+            result = subprocess.run(
+                codex_command(
+                    codex_binary,
+                    repo_root,
+                    output_path,
+                    session_id,
+                    github_mcp_url=github_mcp_url,
+                ),
+                input=prompt,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
         # Parsed before the exit status is checked. A resume that fails still burned
         # tokens, and a call that recovers should report what both attempts cost
         # rather than only the one that worked.
@@ -441,6 +1014,7 @@ def ask_within_lock(
     repo_root: Path,
     codex_binary: str,
     telemetry: InvocationTelemetry,
+    create_grant: OneUseGrant | None = None,
 ) -> str:
     session_id = read_session_id(state_dir)
     telemetry.started_with_session = session_id is not None
@@ -451,7 +1025,7 @@ def ask_within_lock(
             read_usage_baseline(state_dir, session_id) if session_id else {}
         )
         resolved_id, response, usage = invoke_codex(
-            request, session_id, state_dir, repo_root, codex_binary
+            request, session_id, state_dir, repo_root, codex_binary, create_grant
         )
         telemetry.observe_usage(usage)
     except RexError as error:
@@ -470,6 +1044,7 @@ def ask_within_lock(
                 state_dir,
                 repo_root,
                 codex_binary,
+                create_grant,
             )
         except RexError as replacement_error:
             telemetry.observe_usage(getattr(replacement_error, "usage", None))
@@ -512,8 +1087,10 @@ def ask(
     repo_root: Path,
     codex_binary: str,
     lock_timeout: float,
+    allow_issue_create: bool = False,
 ) -> str:
     telemetry = InvocationTelemetry()
+    create_grant = OneUseGrant(allow_issue_create)
     try:
         lock_handle = acquire_lock(state_dir, lock_timeout)
     except RexError as error:
@@ -528,7 +1105,12 @@ def ask(
     try:
         try:
             response = ask_within_lock(
-                prompt, state_dir, repo_root, codex_binary, telemetry
+                prompt,
+                state_dir,
+                repo_root,
+                codex_binary,
+                telemetry,
+                create_grant,
             )
         except BaseException as error:
             write_telemetry(
@@ -670,6 +1252,23 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command")
     ask_parser = subparsers.add_parser("ask", help="send Rex a request")
     ask_parser.add_argument("prompt", nargs="+", help="request to send")
+    ask_parser.add_argument(
+        "--allow-shareview-issue-create",
+        action="store_true",
+        help="authorize at most one ShareView issue creation for this direct invocation",
+    )
+    create_parser = subparsers.add_parser(
+        "create-shareview-issue",
+        help="create one audited ShareView issue through the dedicated Rex identity",
+    )
+    create_parser.add_argument("--title", required=True, help="issue title")
+    create_parser.add_argument("--body", required=True, help="issue body")
+    comment_parser = subparsers.add_parser(
+        "comment-shareview-issue",
+        help="comment on one ShareView issue through the dedicated Rex identity",
+    )
+    comment_parser.add_argument("issue_number", type=int, help="ShareView issue number")
+    comment_parser.add_argument("--body", required=True, help="comment body")
     subparsers.add_parser("status", help="show the persistent Rex session ID")
     subparsers.add_parser("mcp-server", help="serve ask_rex over MCP stdio")
     return parser
@@ -690,6 +1289,16 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         if args.command == "mcp-server":
             return serve_mcp(sys.stdin, sys.stdout)
+        if args.command == "create-shareview-issue":
+            created = create_shareview_issue_direct(args.title, args.body, state_dir)
+            print(f"Created ShareView issue: {created['url']}")
+            return 0
+        if args.command == "comment-shareview-issue":
+            comment = comment_shareview_issue_direct(
+                args.issue_number, args.body, state_dir
+            )
+            print(f"Commented on ShareView issue: {comment['url']}")
+            return 0
         if args.command != "ask":
             parser.print_help(sys.stderr)
             return 2
@@ -701,6 +1310,7 @@ def main(argv: list[str] | None = None) -> int:
             ).expanduser(),
             codex_binary=os.environ.get("REX_CODEX_BIN", "codex"),
             lock_timeout=float(os.environ.get("REX_LOCK_TIMEOUT", "300")),
+            allow_issue_create=args.allow_shareview_issue_create,
         )
         print(response)
         return 0
