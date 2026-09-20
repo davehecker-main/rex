@@ -1,139 +1,148 @@
 # Rex
 
-Rex is a personal AI engineering operating system: the written rules, practices, and
-working agreements that let one engineer use Claude Code to build and continuously
-improve high-quality software.
+<img src="assets/rex.jpg" alt="Rex" width="360">
 
-Rex is not a product, a framework, or a tool to install. It is a repository of
-decisions. The value is that the decisions are written down, versioned, and applied
-consistently instead of being re-derived in every session.
+**A coding agent cannot diagnose the habit it is currently inside.**
 
-## Read these first
+Rex is a therapist for a coding agent. He reads a metrics digest of a working session and
+names the habit that cost you the most time, attention or clarity — then recommends the
+smallest useful correction. He treats *how* the agent works, not what it builds.
 
-| Doc | What it owns |
-|---|---|
-| `docs/charter.md` | Mission, primary user, what is in and out of scope, what success means |
-| `docs/constitution.md` | The principles that do not change session to session, and what each one forbids |
-| `docs/operating-model.md` | How work actually runs: the unit of work, the human/agent split, what "done" means |
-| `docs/architecture.md` | How clients reach one persistent, on-demand Rex agent |
-| `docs/workflow.md` | Mandatory checkout, check-in, staging, and release rules |
-| `docs/personality.md` | Rex's temperament, voice, humor, and communication style |
+He runs on a different model from the agent he is diagnosing, and that is the entire design.
+An agent asked to review its own session reviews its own summary of that session. Rex reads
+the evidence instead.
 
-Read the charter for *why Rex exists*, the constitution for *what Rex will not do*,
-and the operating model for *how a change gets made*.
+Companion to [sheldon-debbie](https://github.com/davehecker-main/sheldon-debbie) and
+[radar](https://github.com/davehecker-main/radar). Sheldon rules on what is true. Debbie
+rules on what is worth doing. Radar decides what to do next. Rex looks after the agent doing
+it.
 
-## The repository is the source of truth
+## What he diagnoses
 
-A decision that lives only in a chat transcript is not a decision — it is a thing that
-gets argued again next week. If it matters, it is committed here.
+- **Bloat** — output that grew without the reader gaining anything.
+- **Rabbit holes** — a detour that stopped serving the requested outcome.
+- **Avoidable interruptions** — stopping to ask what could have been decided, or prepared
+  before asking. Ranked hardest, because your attention is the scarcest thing in the system.
+- **Poor consolidation** — three separate asks that should have arrived as one.
+- **Reassurance-seeking** — checking in where authorization already existed.
+- **Agent-to-agent friction** — consults sent without evidence, advisors spawned twice,
+  findings requested and then ignored.
 
-When a doc disagrees with anyone's recollection of how something went last time, the
-doc wins. Changing a rule means changing the doc, in its own commit, on purpose.
+A healthy session gets no intervention. That is a first-class result, not a failed consult.
 
-## Layout
+## Install
 
-```
-README.md                   this file — the entry point
-bin/rex                     on-demand Rex command
-src/rex_cli.py              persistent-session wrapper
-docs/architecture.md        persistent Rex architecture
-docs/charter.md             mission and scope
-docs/constitution.md        fixed principles
-docs/operating-model.md     how work runs
-docs/workflow.md            Git and GitHub workflow
-docs/personality.md         personality and communication style
-AGENTS.md                   instructions loaded by coding agents
-bin/rex-workflow            guarded checkout/check-in command
+```sh
+./scripts/install.sh
 ```
 
-## Status
+That installs the Codex agent into `~/.codex/agents/` and the Claude slash command into
+`~/.claude/commands/`. Override the destinations:
 
-The first working version is implemented. `bin/rex` and `src/rex_cli.py` provide the
-on-demand wrapper; the test suite covers initial bootstrap, session persistence,
-serialized access, MCP exposure, recovery when Codex reports that a stored session no
-longer exists, and per-invocation telemetry. ShareView is the first configured client:
-its Claude Code `/rex` command reaches the wrapper through the narrow `ask_rex` MCP
-tool. Rex's Git and GitHub workflow is automated where the repository's GitHub plan
-permits.
-
-What Rex deliberately has not decided remains listed at the end of
-`docs/operating-model.md`.
-
-## Persistent Rex
-
-Rex is one persistent Codex conversation reached through an on-demand local wrapper.
-The process does not run continuously: each call resumes the same Codex session,
-returns Rex's response, and exits. A global lock prevents multiple clients from
-writing the session at once.
-
-The Codex session provides conversational continuity; this repository remains Rex's
-authoritative long-term memory. Claude Code, ChatGPT Desktop, and future clients are
-interfaces into Rex rather than separate Rex instances. See `docs/architecture.md`.
-
-Use Rex from this checkout:
-
-```bash
-./bin/rex ask "What should I work on next?"
-./bin/rex status
-./bin/rex mcp-server
+```sh
+CODEX_HOME=/path/to/.codex CLAUDE_HOME=/path/to/.claude ./scripts/install.sh
 ```
 
-`ask` is the interactive CLI path. Agent clients start `mcp-server` and call its
-`ask_rex` tool.
+The two scripts stay in this repo and run from here. They need Node 18+ and no dependencies.
 
-The wrapper expects `bin/rex` and `src/rex_cli.py` to retain their repository-relative
-layout. For ShareView, set `REX_BIN` to the absolute path of this checkout's `bin/rex`,
-or provide a complete `rex` installation on `PATH`. Copying `bin/rex` by itself is not
-an installation: it resolves `../src/rex_cli.py` relative to its own location.
+## Files
 
-Rex starts in a read-only sandbox. It can inspect, advise, review, and propose; changes
-still require a separately authorized implementation workflow.
+```text
+codex/agents/
+  rex.toml              persona, judgment, output contract
 
-When the dedicated `dr-rex-phd` GitHub credential is available, the wrapper gives Rex
-read access to GitHub issues and pull requests plus the ability to comment on ShareView
-issues. Pull-request comments and every other mutation remain unavailable.
-On macOS it reads the credential from the `com.davidhecker.rex.github-read` Keychain
-item for account `rex`. Use a fine-grained token restricted to
-`ShareViewLLC/ShareView` with Metadata read, Pull requests read, and Issues read/write.
-The wrapper ignores the user's global Codex configuration and sends MCP traffic through
-a loopback proxy that holds the credential outside the Codex process. The proxy exposes
-only issue and pull-request read/list/search tools plus a fixed issue-comment tool. The
-comment path resolves a typed Issue before mutation, so it rejects pull requests.
-The token is unavailable to model-run shell commands and never appears in command-line
-arguments or telemetry. Without that dedicated token, GitHub access is not configured
-and Rex continues to work locally.
+claude/commands/
+  rex.md                how Rex is reached, and what goes on the wire
 
-Issue creation is a separate, one-use capability available only from a direct local
-invocation:
-
-```bash
-rex ask --allow-shareview-issue-create "Create the issue we discussed"
+scripts/
+  session-digest.mjs    session transcript -> metrics-only digest
+  log-intervention.mjs  append one row to Rex's memory
 ```
 
-The flag exposes one fixed ShareView issue-creation tool for that invocation and is not
-available through `rex mcp-server`. Every created issue receives the `rex` label; the
-model cannot omit or replace it. Every attempted mutation is recorded in the
-permission-restricted Rex state directory without storing the token or request body.
+There is no `claude/agents/rex.md`, deliberately. Rex is not a subagent of the model he
+diagnoses.
 
-For a deterministic, explicitly authorized creation that does not place Codex in the
-write path, use:
+## Usage
 
-```bash
-rex create-shareview-issue --title "Title" --body "Body"
+```sh
+# 1. Digest the session
+node scripts/session-digest.mjs ~/.claude/projects/<encoded-cwd>/<session-id>.jsonl \
+  -o /tmp/rex-digest.md
+
+# 2. Consult him
+/rex why did that take two hours?
+
+# 3. Log what he said
+node scripts/log-intervention.mjs --session <id> \
+  --finding "..." --advice "..." --acted yes
 ```
 
-This command verifies the dedicated identity, creates exactly one issue with the fixed
-`rex` label, reads the created issue back to verify that label, and uses the same
-append-only mutation audit. It accepts no repository, owner, labels, or arbitrary
-request payload. A failed verification reports the created issue URL and never retries
-the creation.
+`claude/commands/rex.md` carries the full `codex exec` invocation, including the three rules
+that are easy to get wrong: a quoted heredoc rather than command-line interpolation, `<
+/dev/null` or it hangs forever, and an `mktemp` answer file so a failed run cannot serve the
+previous consult's answer.
 
-An explicitly authorized issue comment uses the same deterministic boundary:
+## How consults are passed
 
-```bash
-rex comment-shareview-issue 123 --body "Comment"
-```
+Rex is handed the situation as evidence, not as a persuasive summary — the same three-part
+payload the sheldon-debbie agents use:
 
-The wrapper resolves the number through GitHub's typed Issue field, so a pull request
-with the same number is rejected. The command accepts no repository, URL, or arbitrary
-GraphQL payload and uses the same append-only mutation audit.
+1. **The user's message, verbatim**, in a fenced block, so Rex can tell what was actually
+   asked from how the calling agent framed it.
+2. **Sources by address.** Paths to the digest and the intervention log. Named, never
+   summarized — handing Rex a summary of the evidence hands him the session's own framing of
+   its behavior, which is the one thing he exists to see past.
+3. **The caller's account.** Only what no readable source contains, in four lines or fewer.
+
+## The digest
+
+`session-digest.mjs` reads one Claude Code transcript and emits **metrics only** — no prompt
+text, no assistant prose, no tool arguments, no file contents. Transcripts hold everything a
+session touched; a digest that quoted them would be a liability and would also defeat the
+purpose.
+
+It reports session shape (turns, tool calls, questions put to the human, interruptions),
+output volume (median and maximum prose length), detour indicators (the longest run of tool
+calls with no decision between them, and repeated shell commands), the split between agent
+work and human waiting, and the tool mix.
+
+**A pause is not one thing.** Tool waiting, a necessary human decision, an avoidable
+interruption and a detour all produce elapsed time, and only two of them are a problem.
+Elapsed time alone does not measure human effort, and the digest says so in its own body so
+the distinction reaches Rex every time.
+
+## The intervention log
+
+Rex cold-starts on every consult and remembers nothing. `interventions.jsonl` — at
+`$XDG_DATA_HOME/rex/`, or `~/.local/share/rex/`, or wherever `REX_LOG` points — is his
+memory. One row per consult: what he found, what he advised, whether it was acted on.
+
+This is what makes "the same habit, again" visible. A repeat finding that never got acted on
+is the most useful thing in the log, and Rex is instructed to say so when he sees one.
+
+Log the healthy verdicts too, with `--finding none`. A log holding only the sessions that
+went badly cannot tell you whether Rex is right about the ones that went well.
+
+## Read-only, always
+
+Rex has no write path anywhere. He runs under `codex exec --sandbox read-only`, he does not
+edit files, and he does not file issues — including the issues he recommends. When he finds
+something worth building, he offers a plan and offers to have it executed; carrying that
+forward is the calling session's job, under your project's own process and your judgment.
+
+This is the same boundary Sheldon, Debbie and Radar hold. An advisor that can act on its own
+findings is not an advisor.
+
+## History
+
+Two earlier versions of Rex existed: a persistent Codex session behind a Python wrapper, and
+an MCP integration with issue-filing rights and its own GitHub identity. Neither lasted.
+The wrapper accumulated more machinery than judgment, and its telemetry recorded Rex's own
+runtime rather than anything about the engineer's attention.
+
+This version is a definition, not a system: two files to install, two scripts with no
+dependencies, and nothing running between consults. The earlier tree is tagged `v2-archive`.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
