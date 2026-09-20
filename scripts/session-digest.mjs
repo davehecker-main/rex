@@ -7,7 +7,7 @@
 // No prose, by design: no prompt text, no assistant messages, no file contents, no
 // shell arguments, no search patterns. What it does carry is shape — which tools ran
 // in what order, which files they touched, which shell verbs, and whether a long run
-// ended in a write. The first calibration run established why: counters alone cannot
+// produced anything. The first calibration run established why: counters alone cannot
 // separate a detour from productive execution, and Rex correctly refuses to guess.
 
 import { readFileSync, writeFileSync, readdirSync, statSync } from "node:fs";
@@ -119,28 +119,48 @@ const median = (xs) => {
   return s.length % 2 ? s[m] : Math.round((s[m - 1] + s[m]) / 2);
 };
 
+// Whether a shell command changed something. Read-only work dominates a session, so the
+// cost of being loose here is high: a run of greps that happened to redirect stderr would
+// read as productive. Hence the explicit list, and a redirect rule that ignores /dev/null,
+// file descriptors (`2>`) and `>&2`.
+const SHELL_MUTATES =
+  /\b(git\s+(commit|push|tag|merge|rebase|reset|checkout|switch|branch|rm|mv|apply|revert|stash|clone|init|worktree)|gh\s+\w+\s+(create|edit|close|comment|merge|delete|reopen|ready|review|upload)|gh\s+api\s+(-X|--method)|npm\s+publish|mkdir\s|chmod\s|rmdir\s|rm\s|mv\s|cp\s|tee\s|sed\s+-i)|(?<![0-9&])>>?\s*(?!\/dev\/null)["'~$\w./]/;
+
 // What a tool call touched, as shape rather than content: the file it acted on, or the
 // shell verb it invoked. Never the arguments, the search pattern, or the command itself —
-// a shell line carries paths, flags, and sometimes secrets, and none of that helps a
+// a shell line carries paths, flags and sometimes secrets, and none of that helps a
 // diagnosis of working habits.
 function label(t) {
   const i = t.input ?? {};
   const short = (p) =>
     typeof p === "string" ? p.replace(homedir(), "~").split("/").slice(-2).join("/") : null;
   if (t.name === "Bash" && typeof i.command === "string") {
-    const words = i.command.trim().split(/\s+/);
+    const whole = i.command.trim();
+    // A compound command labeled by its first verb lies: `sleep 30 && gh issue comment`
+    // reads as a wait. Label by whichever part actually changed something, when one did.
+    const parts = whole.split(/&&|\|\||;/).map((p) => p.trim()).filter(Boolean);
+    const cmd = parts.find((p) => SHELL_MUTATES.test(p)) ?? parts[0] ?? whole;
+    const words = cmd.split(/\s+/);
     const verb = basename(words[0] ?? "");
-    // One level of subcommand for the multiplexers, where "git" alone says nothing.
-    const sub = /^(git|gh|npm|npx|node|docker|cargo|supabase|vercel)$/.test(verb)
-      ? words[1]?.replace(/[^\w:-].*$/, "")
-      : null;
-    return `Bash(${sub ? `${verb} ${sub}` : verb || "?"})`;
+    // Two levels for gh, where the noun and the action are separate words and only the
+    // action says whether anything changed: `gh issue view` and `gh issue edit` are not
+    // the same event. One level elsewhere, where `git` alone says nothing.
+    const depth = verb === "gh" ? 2 : /^(git|npm|npx|node|docker|cargo|supabase|vercel)$/.test(verb) ? 1 : 0;
+    const sub = words
+      .slice(1, 1 + depth)
+      .map((w) => w.replace(/[^\w:-].*$/, ""))
+      .filter((w) => w && !w.startsWith("-"))
+      .join(" ");
+    return {
+      label: `Bash(${[verb || "?", sub].filter(Boolean).join(" ")})`,
+      mutates: SHELL_MUTATES.test(whole),
+    };
   }
   const path = short(i.file_path ?? i.path ?? i.notebook_path);
-  if (path) return `${t.name}(${path})`;
+  if (path) return { label: `${t.name}(${path})`, mutates: false };
   const glob = short(i.glob ?? i.pattern_path);
-  if (glob) return `${t.name}(${glob})`;
-  return t.name;
+  if (glob) return { label: `${t.name}(${glob})`, mutates: false };
+  return { label: t.name, mutates: false };
 }
 
 // Segment the session at each assistant message that carries prose. Text is where the
@@ -164,15 +184,20 @@ for (const r of rows) {
   for (const c of content) {
     if (c.type !== "tool_use") continue;
     if (!Number.isFinite(cur.startedAt)) cur.startedAt = ts(r);
-    cur.calls.push({ name: c.name, label: label({ name: c.name, input: c.input }) });
+    const l = label({ name: c.name, input: c.input });
+    cur.calls.push({ name: c.name, label: l.label, mutates: l.mutates });
   }
 }
 if (cur.calls.length) segments.push({ ...cur, endedBy: "session end" });
 
+// What counts as a run having produced something. Edit/Write are the obvious cases, but a
+// run that ends in `git commit` or `gh api -X DELETE` produced plenty — the first version
+// of this called those runs empty, and Rex caught it on the digest itself.
 const WRITERS = new Set(["Edit", "Write", "NotebookEdit"]);
+const produced = (c) => WRITERS.has(c.name) || c.mutates;
 for (const s of segments) {
-  s.wrote = s.calls.some((c) => WRITERS.has(c.name));
-  s.lastWrite = [...s.calls].reverse().find((c) => WRITERS.has(c.name))?.label ?? null;
+  s.wrote = s.calls.some(produced);
+  s.lastWrite = [...s.calls].reverse().find(produced)?.label ?? null;
 }
 
 const longestSilentRun = segments.reduce((n, s) => Math.max(n, s.calls.length), 0);
@@ -257,7 +282,7 @@ const runBlocks =
     .map(
       (s) =>
         `**${s.calls.length} calls, ended by ${s.endedBy}, ${
-          s.wrote ? `produced a write: ${s.lastWrite}` : "produced no write"
+          s.wrote ? `produced: ${s.lastWrite}` : "produced nothing"
         }**\n\n\`\`\`\n${encode(s.calls)}\n\`\`\``,
     )
     .join("\n\n") || "_No run reached 8 calls without a decision between them._";
@@ -313,8 +338,8 @@ ${toolLines}
 ## Run shape
 
 The longest stretches of acting without deciding, in order, run-length encoded. Whether a
-run ended in a write is the outcome: a long run that produced nothing looks very different
-from one that ended in an edit.
+run produced anything is the outcome: an edit, a commit, a push, or any other mutating
+call. A run that produced nothing looks very different from one that ended in a commit.
 
 ${runBlocks}
 
