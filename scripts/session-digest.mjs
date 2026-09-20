@@ -156,6 +156,35 @@ function label(t) {
       mutates: SHELL_MUTATES.test(whole),
     };
   }
+  // Browser work was the blind spot: a 67-call stretch of clicks and screenshots read the
+  // same whether it reached the goal or wandered, because the tool name carried no outcome.
+  // Name the action, the host it acted on, and what was uploaded or submitted.
+  const browser = /^mcp__claude-in-chrome__(.+)$/.exec(t.name);
+  if (browser) {
+    const verb = browser[1];
+    if (verb === "navigate" && typeof i.url === "string") {
+      // Host and the first path segments only. Query strings carry tokens and search terms.
+      let where;
+      try {
+        const u = new URL(i.url.startsWith("http") ? i.url : `https://${i.url}`);
+        where = `${u.host}${u.pathname.split("/").slice(0, 3).join("/")}`;
+      } catch {
+        where = i.url.split("?")[0].slice(0, 60);
+      }
+      return { label: `browser.navigate(${where})`, mutates: false, url: where };
+    }
+    if (verb === "computer") {
+      const act = typeof i.action === "string" ? i.action : "?";
+      return { label: `browser.${act}`, mutates: act === "type" || act === "key" };
+    }
+    if (verb === "file_upload") {
+      const files = Array.isArray(i.paths) ? i.paths.map((p) => basename(p)).join(", ") : "";
+      return { label: `browser.upload(${files})`, mutates: true };
+    }
+    if (verb === "form_input") return { label: "browser.form_input", mutates: true };
+    return { label: `browser.${verb}`, mutates: false };
+  }
+
   const path = short(i.file_path ?? i.path ?? i.notebook_path);
   if (path) return { label: `${t.name}(${path})`, mutates: false };
   const glob = short(i.glob ?? i.pattern_path);
@@ -185,7 +214,7 @@ for (const r of rows) {
     if (c.type !== "tool_use") continue;
     if (!Number.isFinite(cur.startedAt)) cur.startedAt = ts(r);
     const l = label({ name: c.name, input: c.input });
-    cur.calls.push({ name: c.name, label: l.label, mutates: l.mutates });
+    cur.calls.push({ name: c.name, label: l.label, mutates: l.mutates, url: l.url });
   }
 }
 if (cur.calls.length) segments.push({ ...cur, endedBy: "session end" });
@@ -198,6 +227,10 @@ const produced = (c) => WRITERS.has(c.name) || c.mutates;
 for (const s of segments) {
   s.wrote = s.calls.some(produced);
   s.lastWrite = [...s.calls].reverse().find(produced)?.label ?? null;
+  // Where a browser run ended up is its closest honest outcome: the same click count
+  // reads very differently ending on a settings page than on the page it started from.
+  s.lastUrl = [...s.calls].reverse().find((c) => c.url)?.url ?? null;
+  s.browserCalls = s.calls.filter((c) => c.label.startsWith("browser.")).length;
 }
 
 const longestSilentRun = segments.reduce((n, s) => Math.max(n, s.calls.length), 0);
@@ -283,6 +316,8 @@ const runBlocks =
       (s) =>
         `**${s.calls.length} calls, ended by ${s.endedBy}, ${
           s.wrote ? `produced: ${s.lastWrite}` : "produced nothing"
+        }${
+          s.browserCalls && s.lastUrl ? `, browser ended at ${s.lastUrl}` : ""
         }**\n\n\`\`\`\n${encode(s.calls)}\n\`\`\``,
     )
     .join("\n\n") || "_No run reached 8 calls without a decision between them._";
@@ -339,7 +374,9 @@ ${toolLines}
 
 The longest stretches of acting without deciding, in order, run-length encoded. Whether a
 run produced anything is the outcome: an edit, a commit, a push, or any other mutating
-call. A run that produced nothing looks very different from one that ended in a commit.
+call, an upload, or a form submission. A browser run also reports where it ended up, which
+is the closest honest outcome a sequence of clicks has: the same click count reads very
+differently ending on a settings page than on the page it started from.
 
 ${runBlocks}
 
