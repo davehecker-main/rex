@@ -16,17 +16,19 @@ reached, what goes on the wire, and how the answer comes back.
 He is not a subagent of the model he is diagnosing. A coding agent cannot see the habit it is
 currently inside, so Rex runs on a different model, reading evidence rather than memory.
 
-Reach him with `codex exec`, read-only:
+Reach him with the repo's own script, which builds the prompt and calls `codex exec`:
 
 ```sh
-PROMPT=$(mktemp /tmp/rex-prompt.XXXXXX)
-ANSWER=$(mktemp /tmp/rex-answer.XXXXXX)
-cat > "$PROMPT" <<'REX_PROMPT'
-<the three sections below>
-REX_PROMPT
-codex exec --cd "$(git rev-parse --show-toplevel)" --sandbox read-only \
-  -o "$ANSWER" "$(cat "$PROMPT")" < /dev/null && cat "$ANSWER"
+scripts/rex-consult.sh /tmp/rex-digest.md "why did that take two hours?"
 ```
+
+**`codex exec` has no `--agent` flag and does not read `~/.codex/agents/`.** The installed
+`rex.toml` is there for interactive Codex clients that expose custom agents; for the CLI the
+script extracts `developer_instructions` from it and puts the persona in the prompt. Editing
+`rex.toml` is what changes Rex either way.
+
+The script handles the four things that are easy to get wrong, and any hand-rolled call must
+handle them too:
 
 - **Never interpolate the argument into the command line.** A quoted heredoc to a file, then
   `"$(cat "$PROMPT")"`. Backticks and `$(...)` in a user's message execute otherwise.
@@ -35,7 +37,6 @@ codex exec --cd "$(git rev-parse --show-toplevel)" --sandbox read-only \
 - **`mktemp` the answer file and check the exit code.** A failed run exits non-zero without
   writing `-o`, so a fixed path serves the previous consult's answer as this one's.
 - **`--sandbox read-only`, always.** Rex has no write path anywhere, by design.
-- **Derive `--cd` from the current tree.** A hardcoded path points him at the wrong checkout.
 
 ## Build the digest first
 

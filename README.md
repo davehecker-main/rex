@@ -56,6 +56,7 @@ claude/commands/
 
 scripts/
   session-digest.mjs    session transcript -> metrics-only digest
+  rex-consult.sh        build the prompt and call codex exec
   log-intervention.mjs  append one row to Rex's memory
 ```
 
@@ -70,17 +71,19 @@ node scripts/session-digest.mjs ~/.claude/projects/<encoded-cwd>/<session-id>.js
   -o /tmp/rex-digest.md
 
 # 2. Consult him
-/rex why did that take two hours?
+scripts/rex-consult.sh /tmp/rex-digest.md "why did that take two hours?"
 
 # 3. Log what he said
 node scripts/log-intervention.mjs --session <id> \
   --finding "..." --advice "..." --acted yes
 ```
 
-`claude/commands/rex.md` carries the full `codex exec` invocation, including the three rules
-that are easy to get wrong: a quoted heredoc rather than command-line interpolation, `<
-/dev/null` or it hangs forever, and an `mktemp` answer file so a failed run cannot serve the
-previous consult's answer.
+`codex exec` has no `--agent` flag and does not read `~/.codex/agents/`, so `rex-consult.sh`
+extracts the persona from `rex.toml` and puts it in the prompt. The installed `rex.toml` is
+for interactive Codex clients that expose custom agents; editing it changes Rex either way.
+`claude/commands/rex.md` carries the rest, including the three rules that are easy to get
+wrong: a quoted heredoc rather than command-line interpolation, `< /dev/null` or it hangs
+forever, and an `mktemp` answer file so a failed run cannot serve the previous answer.
 
 ## How consults are passed
 
