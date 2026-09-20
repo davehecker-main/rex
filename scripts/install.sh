@@ -14,7 +14,24 @@ install_file() {
 }
 
 install_file "$repo_dir/codex/agents/rex.toml" "$codex_home/agents/rex.toml"
-install_file "$repo_dir/claude/commands/rex.md" "$claude_home/commands/rex.md"
+
+# The command file calls the scripts by repo-relative path, but the installed copy runs
+# from whatever repo the session is working in. Absolutize the call sites on the way out,
+# or the digest step fails with "no such file" and the consult never happens.
+install_command() {
+  dest=$1
+  tmp=$(mktemp)
+  sed -e "s#scripts/rex-consult.sh#$repo_dir/scripts/rex-consult.sh#g" \
+      -e "s#scripts/session-digest.mjs#$repo_dir/scripts/session-digest.mjs#g" \
+      -e "s#scripts/log-intervention.mjs#$repo_dir/scripts/log-intervention.mjs#g" \
+      "$repo_dir/claude/commands/rex.md" > "$tmp"
+  mkdir -p "$(dirname -- "$dest")"
+  cp "$tmp" "$dest"
+  rm -f "$tmp"
+  printf 'installed %s\n' "$dest"
+}
+
+install_command "$claude_home/commands/rex.md"
 
 printf '\nRex runs on Codex. The scripts stay in this repo; the command file calls them\n'
 printf 'from here:\n\n'

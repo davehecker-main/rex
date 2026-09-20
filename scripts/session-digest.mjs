@@ -83,10 +83,22 @@ const ts = (r) => (r.timestamp ? Date.parse(r.timestamp) : NaN);
 const contentTypes = (r) =>
   Array.isArray(r.message?.content) ? r.message.content.map((c) => c.type) : [];
 
-// A human turn is a user row whose content is a plain string. A user row carrying
-// tool_result blocks is the harness returning a tool call, not a person typing.
-const isHumanTurn = (r) =>
-  r.type === "user" && typeof r.message?.content === "string" && !r.isMeta;
+// What a person typed in a user row, or null if nobody did. Content is a plain string,
+// or blocks when the turn carried an attachment — an image turn is still a typed turn.
+// A row carrying tool_result blocks is the harness returning a tool call, not a person.
+const typedText = (r) => {
+  if (r.type !== "user" || r.isMeta) return null;
+  const c = r.message?.content;
+  if (typeof c === "string") return c;
+  if (!Array.isArray(c) || c.some((b) => b.type === "tool_result")) return null;
+  return c.filter((b) => b.type === "text").map((b) => b.text ?? "").join("");
+};
+
+// An interruption is a marker the harness writes into a user row, not something typed,
+// so it is a signal of its own rather than a turn.
+const isInterrupt = (r) => /\[Request interrupted/i.test(typedText(r) ?? "");
+
+const isHumanTurn = (r) => typedText(r) !== null && !isInterrupt(r);
 
 const humanTurns = rows.filter(isHumanTurn);
 const assistantTurns = rows.filter((r) => r.type === "assistant");
@@ -296,11 +308,7 @@ for (let i = 1; i < ordered.length; i++) {
 const spanMs =
   ordered.length > 1 ? ts(ordered[ordered.length - 1]) - ts(ordered[0]) : 0;
 
-const interrupts = rows.filter((r) => {
-  const c = r.message?.content;
-  const s = typeof c === "string" ? c : "";
-  return /\[Request interrupted/i.test(s);
-}).length;
+const interrupts = rows.filter(isInterrupt).length;
 
 const mins = (ms) => Math.round(ms / 60000);
 
