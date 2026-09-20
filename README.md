@@ -66,9 +66,8 @@ diagnoses.
 ## Usage
 
 ```sh
-# 1. Digest the session
-node scripts/session-digest.mjs ~/.claude/projects/<encoded-cwd>/<session-id>.jsonl \
-  -o /tmp/rex-digest.md
+# 1. Digest the session (--current resolves this session's transcript)
+node scripts/session-digest.mjs --current -o /tmp/rex-digest.md
 
 # 2. Consult him
 scripts/rex-consult.sh /tmp/rex-digest.md "why did that take two hours?"
@@ -105,9 +104,16 @@ session touched; a digest that quoted them would be a liability and would also d
 purpose.
 
 It reports session shape (turns, tool calls, questions put to the human, interruptions),
-output volume (median and maximum prose length), detour indicators (the longest run of tool
-calls with no decision between them, and repeated shell commands), the split between agent
-work and human waiting, and the tool mix.
+output volume (median and maximum prose length), detour indicators, the split between agent
+work and human waiting, the tool mix, and — the part that makes a diagnosis possible — **run
+shape**: the longest stretches of acting without deciding, run-length encoded as the tools
+that ran, the files they touched and the shell verbs they invoked, each marked with whether
+it ended in a write.
+
+That last part exists because the first calibration run failed without it. Given counters
+alone, Rex correctly refused to diagnose a 106-call run: the numbers could not separate
+productive execution from a detour, and he would not guess. A run that ends in an edit and
+one that produces nothing are the same count and different behavior.
 
 **A pause is not one thing.** Tool waiting, a necessary human decision, an avoidable
 interruption and a detour all produce elapsed time, and only two of them are a problem.

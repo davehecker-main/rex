@@ -1,23 +1,64 @@
 #!/usr/bin/env node
-// Turn one Claude Code session transcript into a metrics-only digest for Rex.
+// Turn one Claude Code session transcript into a digest for Rex.
 //
 //   node scripts/session-digest.mjs <session.jsonl> [-o digest.md]
+//   node scripts/session-digest.mjs --current [-o digest.md]
 //
-// Metrics only, by design: no prompt text, no assistant prose, no tool arguments,
-// no file contents. Rex diagnoses working habits from shape and timing, and a digest
-// that carries transcript text would hand him the session's own framing along with it.
+// No prose, by design: no prompt text, no assistant messages, no file contents, no
+// shell arguments, no search patterns. What it does carry is shape — which tools ran
+// in what order, which files they touched, which shell verbs, and whether a long run
+// ended in a write. The first calibration run established why: counters alone cannot
+// separate a detour from productive execution, and Rex correctly refuses to guess.
 
-import { readFileSync, writeFileSync } from "node:fs";
-import { basename } from "node:path";
+import { readFileSync, writeFileSync, readdirSync, statSync } from "node:fs";
+import { basename, sep } from "node:path";
+import { homedir } from "node:os";
 
 const argv = process.argv.slice(2);
 const outFlag = argv.indexOf("-o");
 const outPath = outFlag === -1 ? null : argv[outFlag + 1];
-const inPath =
-  outFlag === -1 ? argv[0] : argv.find((a, i) => i !== outFlag && i !== outFlag + 1);
+
+// Claude Code keeps transcripts under ~/.claude/projects/<encoded-cwd>/<session-id>.jsonl,
+// where both "/" and "." become "-". --current resolves the newest one for this directory
+// so no caller has to reimplement that encoding.
+function currentSession() {
+  const encoded = process.cwd().split(sep).join("-").split(".").join("-");
+  const dir = `${homedir()}/.claude/projects/${encoded}`;
+  let entries;
+  try {
+    entries = readdirSync(dir).filter((f) => f.endsWith(".jsonl"));
+  } catch {
+    throw new Error(`no transcript directory for this working directory: ${dir}`);
+  }
+  if (entries.length === 0) throw new Error(`no transcripts in ${dir}`);
+
+  // CLAUDE_CODE_SESSION_ID names the session exactly. Fall back to the newest transcript,
+  // which is a guess: several sessions can share one working directory, and the newest
+  // file belongs to whichever of them wrote last, not necessarily to the caller.
+  const id = process.env.CLAUDE_CODE_SESSION_ID;
+  if (id && entries.includes(`${id}.jsonl`)) return `${dir}/${id}.jsonl`;
+  return entries
+    .map((f) => ({ f: `${dir}/${f}`, t: statSync(`${dir}/${f}`).mtimeMs }))
+    .sort((a, b) => b.t - a.t)[0].f;
+}
+
+let inPath;
+if (argv.includes("--current")) {
+  try {
+    inPath = currentSession();
+  } catch (e) {
+    console.error(e.message);
+    process.exit(1);
+  }
+} else {
+  inPath = outFlag === -1 ? argv[0] : argv.find((a, i) => i !== outFlag && i !== outFlag + 1);
+}
 
 if (!inPath) {
-  console.error("usage: session-digest.mjs <session.jsonl> [-o digest.md]");
+  console.error(
+    "usage: session-digest.mjs <session.jsonl> [-o digest.md]\n" +
+      "       session-digest.mjs --current [-o digest.md]",
+  );
   process.exit(2);
 }
 
@@ -78,20 +119,105 @@ const median = (xs) => {
   return s.length % 2 ? s[m] : Math.round((s[m - 1] + s[m]) / 2);
 };
 
-// Longest run of consecutive tool calls with no assistant prose between them. A long
-// run is the shape of a detour: acting repeatedly without stopping to decide anything.
-let longestSilentRun = 0;
-let run = 0;
-for (const r of rows) {
-  if (r.type !== "assistant") continue;
-  const types = contentTypes(r);
-  if (types.includes("text")) {
-    longestSilentRun = Math.max(longestSilentRun, run);
-    run = 0;
+// What a tool call touched, as shape rather than content: the file it acted on, or the
+// shell verb it invoked. Never the arguments, the search pattern, or the command itself —
+// a shell line carries paths, flags, and sometimes secrets, and none of that helps a
+// diagnosis of working habits.
+function label(t) {
+  const i = t.input ?? {};
+  const short = (p) =>
+    typeof p === "string" ? p.replace(homedir(), "~").split("/").slice(-2).join("/") : null;
+  if (t.name === "Bash" && typeof i.command === "string") {
+    const words = i.command.trim().split(/\s+/);
+    const verb = basename(words[0] ?? "");
+    // One level of subcommand for the multiplexers, where "git" alone says nothing.
+    const sub = /^(git|gh|npm|npx|node|docker|cargo|supabase|vercel)$/.test(verb)
+      ? words[1]?.replace(/[^\w:-].*$/, "")
+      : null;
+    return `Bash(${sub ? `${verb} ${sub}` : verb || "?"})`;
   }
-  run += types.filter((t) => t === "tool_use").length;
+  const path = short(i.file_path ?? i.path ?? i.notebook_path);
+  if (path) return `${t.name}(${path})`;
+  const glob = short(i.glob ?? i.pattern_path);
+  if (glob) return `${t.name}(${glob})`;
+  return t.name;
 }
-longestSilentRun = Math.max(longestSilentRun, run);
+
+// Segment the session at each assistant message that carries prose. Text is where the
+// session stopped to say something — a decision point — so a segment is one stretch of
+// acting without deciding. Whether a segment ends in a write is the outcome proxy: a long
+// run that produced nothing looks very different from one that ended in an edit.
+const segments = [];
+let cur = { calls: [], startedAt: NaN };
+for (const r of rows) {
+  if (isHumanTurn(r)) {
+    if (cur.calls.length) segments.push({ ...cur, endedBy: "human turn" });
+    cur = { calls: [], startedAt: ts(r) };
+    continue;
+  }
+  if (r.type !== "assistant") continue;
+  const content = r.message?.content ?? [];
+  if (content.some((c) => c.type === "text")) {
+    if (cur.calls.length) segments.push({ ...cur, endedBy: "decision" });
+    cur = { calls: [], startedAt: ts(r) };
+  }
+  for (const c of content) {
+    if (c.type !== "tool_use") continue;
+    if (!Number.isFinite(cur.startedAt)) cur.startedAt = ts(r);
+    cur.calls.push({ name: c.name, label: label({ name: c.name, input: c.input }) });
+  }
+}
+if (cur.calls.length) segments.push({ ...cur, endedBy: "session end" });
+
+const WRITERS = new Set(["Edit", "Write", "NotebookEdit"]);
+for (const s of segments) {
+  s.wrote = s.calls.some((c) => WRITERS.has(c.name));
+  s.lastWrite = [...s.calls].reverse().find((c) => WRITERS.has(c.name))?.label ?? null;
+}
+
+const longestSilentRun = segments.reduce((n, s) => Math.max(n, s.calls.length), 0);
+
+// Run-length encode a segment so a 40-call stretch reads as a shape rather than a list.
+const encode = (calls) => {
+  const out = [];
+  for (const c of calls) {
+    const last = out[out.length - 1];
+    if (last && last.label === c.label) last.n += 1;
+    else out.push({ label: c.label, n: 1 });
+  }
+  return out.map((e) => (e.n > 1 ? `${e.label}×${e.n}` : e.label)).join(" → ");
+};
+
+const longRuns = [...segments]
+  .map((s, i) => ({ ...s, i }))
+  .filter((s) => s.calls.length >= 8)
+  .sort((a, b) => b.calls.length - a.calls.length)
+  .slice(0, 5)
+  .sort((a, b) => a.i - b.i);
+
+// Which files the session kept coming back to. Convergence on one file and a scatter
+// across twenty are the same call count and completely different behavior.
+const pathCounts = {};
+for (const s of segments)
+  for (const c of s.calls) {
+    const m = /^(?:Read|Edit|Write|NotebookEdit|Glob|Grep)\((.+)\)$/.exec(c.label);
+    if (m) pathCounts[m[1]] = (pathCounts[m[1]] ?? 0) + 1;
+  }
+
+const verbCounts = {};
+for (const s of segments)
+  for (const c of s.calls) {
+    const m = /^Bash\((.+)\)$/.exec(c.label);
+    if (m) verbCounts[m[1]] = (verbCounts[m[1]] ?? 0) + 1;
+  }
+
+const topTable = (counts, header, limit = 15) => {
+  const rowsOut = Object.entries(counts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, limit)
+    .map(([k, n]) => `| ${k} | ${n} |`);
+  return rowsOut.length ? `| ${header} | Calls |\n|---|---|\n${rowsOut.join("\n")}` : null;
+};
 
 // Repeated Bash commands: the same command run more than once is either a retry loop
 // or a fact the session failed to keep hold of.
@@ -126,9 +252,20 @@ const toolLines =
     .map(([name, n]) => `| ${name} | ${n} |`)
     .join("\n") || "| — | 0 |";
 
+const runBlocks =
+  longRuns
+    .map(
+      (s) =>
+        `**${s.calls.length} calls, ended by ${s.endedBy}, ${
+          s.wrote ? `produced a write: ${s.lastWrite}` : "produced no write"
+        }**\n\n\`\`\`\n${encode(s.calls)}\n\`\`\``,
+    )
+    .join("\n\n") || "_No run reached 8 calls without a decision between them._";
+
 const digest = `# Session digest — ${basename(inPath)}
 
-Metrics only. No transcript text is included in this file.
+No transcript text: no prompts, no assistant messages, no file contents, no shell
+arguments, no search patterns. Tool names, the files they touched, and shell verbs only.
 
 ## Shape
 
@@ -172,6 +309,23 @@ interruption produce the same number here. Read it against the question count.
 | Tool | Calls |
 |---|---|
 ${toolLines}
+
+## Run shape
+
+The longest stretches of acting without deciding, in order, run-length encoded. Whether a
+run ended in a write is the outcome: a long run that produced nothing looks very different
+from one that ended in an edit.
+
+${runBlocks}
+
+## Where the work landed
+
+${topTable(pathCounts, "File") ?? "_No file-addressed calls._"}
+
+${topTable(verbCounts, "Shell verb") ?? "_No shell calls._"}
+
+Convergence and scatter are the same call count and different behavior: repeated returns to
+one file read differently from a spread across twenty.
 `;
 
 if (outPath) {

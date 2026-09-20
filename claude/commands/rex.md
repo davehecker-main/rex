@@ -43,12 +43,12 @@ handle them too:
 Rex reads metrics, never the transcript. Produce the digest before the consult:
 
 ```sh
-node scripts/session-digest.mjs <path-to-session.jsonl> -o /tmp/rex-digest.md
+node scripts/session-digest.mjs --current -o /tmp/rex-digest.md
 ```
 
-Claude Code keeps transcripts under `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`,
-where both `/` and `.` encode as `-`. Digest the session under discussion — usually the
-current one.
+`--current` resolves this session's own transcript: exactly, from `CLAUDE_CODE_SESSION_ID`,
+falling back to the newest transcript for this working directory. Pass a path instead to
+digest a different session. Do not reimplement the path encoding at the call site.
 
 **If the digest cannot be produced, stop and say so.** Do not consult Rex on a session he has
 no evidence for; he will tell you the same thing, one round trip later.
