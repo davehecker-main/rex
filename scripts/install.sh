@@ -25,6 +25,7 @@ install_command() {
       -e "s#scripts/session-digest.mjs#$repo_dir/scripts/session-digest.mjs#g" \
       -e "s#scripts/log-intervention.mjs#$repo_dir/scripts/log-intervention.mjs#g" \
       -e "s#scripts/rex-report.mjs#$repo_dir/scripts/rex-report.mjs#g" \
+      -e "s#scripts/rex-report.sh#$repo_dir/scripts/rex-report.sh#g" \
       "$repo_dir/claude/commands/rex.md" > "$tmp"
   mkdir -p "$(dirname -- "$dest")"
   cp "$tmp" "$dest"

@@ -47,3 +47,12 @@ test("invalid decisions and unkeyed decisions do not append", () => {
   assert.equal(run(log, "--habit", "avoidable-wait", "--decision", "drop").status, 0);
   assert.equal(rows(log).length, 1);
 });
+
+test("a finding can record an attributable comparison metric, but a decision cannot", () => {
+  const log = join(mkdtempSync(join(tmpdir(), "rex-log-")), "interventions.jsonl");
+  assert.equal(run(log, "--finding", "interruption pattern", "--metric", "interruptionsPer100HumanTurns", "--acted", "yes").status, 0);
+  assert.equal(rows(log)[0].metric, "interruptionsPer100HumanTurns");
+  assert.equal(run(log, "--finding", "unsupported", "--metric", "humanMinutes").status, 2);
+  assert.equal(run(log, "--habit", "interruptions", "--decision", "rule", "--metric", "interruptionsPer100HumanTurns").status, 2);
+  assert.equal(rows(log).length, 1);
+});

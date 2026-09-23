@@ -6,7 +6,7 @@ import { resolveReportQuery } from './report-query.mjs';
 import { assessReport } from './report-assessment.mjs';
 import { buildReportView } from './report-view.mjs';
 import { deliverReport } from './report-browser.mjs';
-import { collectSemanticEvidence } from './report-content.mjs';
+import { collectSemanticEvidence, collectContentReferences } from './report-content.mjs';
 
 export function discoverProjects(root) {
   let entries;
@@ -53,11 +53,15 @@ function validateOverride(value, request, projects, timeZone) {
 }
 
 function findings(report, assessment) {
-  const entries = assessment.patterns.map((pattern) => ({
+  const entries = (assessment.rexJudgment?.findings ?? []).map((finding, index) => ({
+    id: `rex-${index + 1}`, label: finding.label, sessions: finding.sessions,
+    status: finding.status, caveat: finding.caveat,
+  }));
+  entries.push(...assessment.patterns.map((pattern) => ({
     id: `metric-${pattern.metric}`, label: `Repeated ${pattern.metric} in available metrics`,
     sessions: pattern.evidence.sessions, status: pattern.status,
     caveat: pattern.caveat,
-  }));
+  })));
   for (const [index, finding] of assessment.semanticFindings.entries()) {
     entries.push({ id: `content-${index + 1}`, label: finding.label,
       sessions: [...new Set(finding.evidence.map((item) => item.session))],
@@ -71,6 +75,36 @@ function findings(report, assessment) {
   return entries;
 }
 
+function validateJudgment(value, report, contentAnalysis, contentReferences) {
+  if (!value || typeof value !== 'object' || typeof value.summary !== 'string' || !Array.isArray(value.findings)) {
+    throw new Error('Rex judgment needs a summary and findings array');
+  }
+  const sessions = new Set(report.groups.bySession.map((row) => row.key));
+  for (const finding of value.findings) {
+    if (typeof finding.label !== 'string' || typeof finding.caveat !== 'string' ||
+      !['metric-observation', 'established-behavior'].includes(finding.status) ||
+      !Array.isArray(finding.sessions) || !finding.sessions.length ||
+      !Array.isArray(finding.evidence) || !finding.evidence.length) {
+      throw new Error('Rex finding needs a label, status, caveat, sessions, and evidence');
+    }
+    if (finding.status === 'established-behavior' && !contentAnalysis) {
+      throw new Error('established behavior requires content opt-in');
+    }
+    if (finding.sessions.some((session) => !sessions.has(session)) ||
+      finding.evidence.some((item) => !sessions.has(item.session))) {
+      throw new Error('Rex finding cites an unknown session');
+    }
+    if (finding.evidence.some((item) => typeof item.reference !== 'string' || !item.reference)) {
+      throw new Error('Rex finding needs attributable evidence references');
+    }
+    if (finding.status === 'established-behavior' &&
+      finding.evidence.some((item) => !contentReferences.has(`${item.session}:${item.reference}`))) {
+      throw new Error('Rex finding cites an unknown transcript reference');
+    }
+  }
+  return { summary: value.summary, findings: value.findings };
+}
+
 export function runReportRequest(request, {
   root = join(homedir(), '.claude'), previous = null, now = new Date().toISOString(),
   timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -78,6 +112,8 @@ export function runReportRequest(request, {
   interventionLog = process.env.REX_LOG ?? join(process.env.XDG_DATA_HOME ?? join(homedir(), '.local', 'share'), 'rex', 'interventions.jsonl'),
   semanticEvidence = [],
   queryOverride = null,
+  judgment = null,
+  deliver = true,
 } = {}) {
   const projects = discoverProjects(root);
   const queryResult = queryOverride ? { status: 'resolved', query: validateOverride(queryOverride, request, projects, timeZone) } :
@@ -111,14 +147,24 @@ export function runReportRequest(request, {
     projectComparison: query.kind === 'comparison' && query.projects.length === 2 ? query.projects : undefined,
     interventions: logged,
     contentAnalysis: query.contentAnalysis, semanticEvidence: contentEvidence });
+  const effectiveJudgment = judgment ?? (query.kind === 'sessions' ? previous?.judgment : null);
+  if (effectiveJudgment) {
+    const references = query.contentAnalysis ? collectContentReferences({ root, from: options.from,
+      to: options.to, projects: query.projects, session: options.session }) : new Set();
+    assessment.rexJudgment = validateJudgment(effectiveJudgment, report, query.contentAnalysis, references);
+    if (assessment.rexJudgment.findings.some((item) => item.status === 'established-behavior')) {
+      assessment.contentAnalysis.status = 'supported';
+    }
+  }
   const reportFindings = findings(report, assessment);
   const selectedFinding = query.kind === 'sessions'
     ? reportFindings.find((entry) => entry.id === query.findingId) : null;
   const view = buildReportView(report, { compareTo: baseline, assessment,
     query, projectNames: projects, findings: reportFindings, finding: selectedFinding });
-  const delivery = deliverReport(view, { preference: query.surface === 'default' ? undefined : query.surface,
-    terminalSupported, outputDir, openBrowser, writeTerminal });
-  const context = { query: { ...query, findingId: reportFindings[0]?.id ?? null },
-    reportPath: delivery.path ?? null };
-  return { status: 'delivered', query, report, assessment, view, delivery, context };
+  const delivery = deliver ? deliverReport(view, { preference: query.surface === 'default' ? undefined : query.surface,
+    terminalSupported, outputDir, openBrowser, writeTerminal }) : null;
+  const context = { query: { ...query, findingIds: reportFindings.map((entry) => entry.id),
+    findingId: reportFindings.length === 1 ? reportFindings[0].id : query.kind === 'sessions' ? query.findingId : null },
+    reportPath: delivery?.path ?? null, judgment: assessment.rexJudgment ?? null };
+  return { status: deliver ? 'delivered' : 'prepared', query, report, baseline, assessment, view, delivery, context };
 }

@@ -168,6 +168,11 @@ comparison, or a recurring semantic habit from counts alone. Transcript content 
 requires an explicit opt-in request and attributable session evidence; ordinary reports
 must not reveal transcript content. A report artifact is permitted to be written, but Rex
 remains read-only with respect to source projects.
+When the report judge script asks for JSON, return only its requested summary and findings
+schema. Cite known session IDs and metric references; for an established semantic behavior,
+cite real transcript message UUIDs and only after explicit content opt-in. A metrics-only
+observation is a suspicion, not a diagnosis. Empty findings with a clear uncertainty summary
+are valid. The caller validates your references before rendering the report.
 
 ```
 **Rex**

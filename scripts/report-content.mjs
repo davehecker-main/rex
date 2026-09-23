@@ -60,3 +60,28 @@ export function collectSemanticEvidence({ root, from, to, projects = [], session
       evidence: rows.slice(0, 20),
       caveat: 'The repeated wording is observed; whether repetition was avoidable needs context.' }));
 }
+
+export function collectContentReferences({ root, from, to, projects = [], session } = {}) {
+  const references = new Set();
+  const projectRoot = join(root, 'projects');
+  let entries;
+  try { entries = readdirSync(projectRoot, { withFileTypes: true }); }
+  catch (error) { if (error.code === 'ENOENT') return references; throw error; }
+  for (const entry of entries) {
+    if (!entry.isDirectory() || (projects.length && !projects.includes(entry.name))) continue;
+    for (const path of files(join(projectRoot, entry.name))) {
+      let content;
+      try { content = readFileSync(path, 'utf8'); } catch { continue; }
+      for (const line of content.split('\n')) {
+        if (!line.trim()) continue;
+        let row;
+        try { row = JSON.parse(line); } catch { continue; }
+        const at = Date.parse(row.timestamp ?? '');
+        if (!Number.isFinite(at) || (from && at < Date.parse(from)) || (to && at >= Date.parse(to))) continue;
+        if (session && row.sessionId !== session) continue;
+        if (row.sessionId && row.uuid) references.add(`${row.sessionId}:${row.uuid}`);
+      }
+    }
+  }
+  return references;
+}

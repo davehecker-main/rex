@@ -21,7 +21,9 @@ async function main() {
   const root = option('--root') ?? join(homedir(), '.claude');
   const file = option('--request-file');
   const queryFile = option('--query-file');
-  const excluded = new Set(['--context', '--root', '--request-file', '--query-file']);
+  const prepareFile = option('--prepare');
+  const judgmentFile = option('--judgment-file');
+  const excluded = new Set(['--context', '--root', '--request-file', '--query-file', '--prepare', '--judgment-file']);
   const words = [];
   for (let i = 2; i < process.argv.length; i++) {
     if (excluded.has(process.argv[i])) { i++; continue; }
@@ -39,9 +41,20 @@ async function main() {
       process.stdin.on('end', () => resolve(input));
     });
   const queryOverride = queryFile ? JSON.parse(readFileSync(queryFile, 'utf8')) : null;
-  const result = runReportRequest(request, { root, previous: readContext(statePath), queryOverride });
+  const judgment = judgmentFile ? JSON.parse(readFileSync(judgmentFile, 'utf8')) : null;
+  const result = runReportRequest(request, { root, previous: readContext(statePath), queryOverride,
+    judgment, deliver: !prepareFile });
   if (result.status === 'clarification') {
     process.stdout.write(`${result.question}\n`);
+    if (prepareFile) process.exitCode = 3;
+    return;
+  }
+  if (prepareFile) {
+    const evidence = { request, query: result.query, report: result.report,
+      baseline: result.baseline, assessment: result.assessment,
+      contentSources: result.query.contentAnalysis ? join(root, 'projects') : null };
+    writeFileSync(prepareFile, JSON.stringify(evidence), { mode: 0o600 });
+    process.stdout.write(`Prepared Rex evidence: ${prepareFile}\n`);
     return;
   }
   mkdirSync(dirname(statePath), { recursive: true });

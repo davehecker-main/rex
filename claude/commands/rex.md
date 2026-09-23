@@ -16,12 +16,18 @@ reached, what goes on the wire, and how the answer comes back.
 ## Report requests and follow-ups
 
 For a report request, write the user's exact words to a private temporary request file using
-the host's file-writing tool, then run `node scripts/rex-report.mjs --request-file <path>`.
+the host's file-writing tool, then run `scripts/rex-report.sh <path>`.
 Do not interpolate the request into shell code. The runner remembers the last report's query
 in a private context file, so follow-ups such as “only ShareView,” “compare that with the
 previous month,” and “show the sessions behind that finding” retain scope.
 
-The command opens a private HTML report in the browser. A terminal preference falls back to
+The command prepares private structured evidence. For behavior, comparison, and intervention
+requests, it asks Rex through read-only `codex exec` to judge that evidence and validates
+his session references before adding the judgment to the report. If the host cannot launch
+Codex, it delivers the measured report and clearly says judgment was unavailable. The
+prepared evidence never includes raw transcript text; an explicit content-analysis request
+allows Rex to read selected local transcript sources. The command opens a private HTML
+report in the browser. A terminal preference falls back to
 the browser because this host does not expose an integrated terminal report UI. Relay only
 the report URL or launch confirmation and any limitation printed by the runner; do not paste
 the full report into chat. If the runner asks for clarification, ask the user that question
@@ -30,7 +36,8 @@ request with a narrower usage query.
 
 The built-in resolver handles common time and follow-up language. For other clear phrasing,
 you may resolve the user's words into a structured query JSON file and pass
-`--query-file <path>` alongside `--request-file`. The fields are `kind` (`usage`,
+`--query-file <path>` alongside `--request-file` when invoking the underlying Node runner.
+The fields are `kind` (`usage`,
 `behavior`, `comparison`, `intervention`, `sessions`), `period` and `comparePeriod` as
 inclusive ISO `from` and exclusive ISO `to`, `projects` as available encoded directory
 keys, `models` as exact model IDs, `surface` (`browser` or `terminal`), and optional
@@ -160,6 +167,10 @@ Omit `--habit` when Rex names none. Log healthy verdicts with `--finding none` a
 habit. A finding the caller declines is likewise logged as `none`, so it cannot become a
 sighting. For a question, keep
 Rex's exact wording in `--advice`; that row lets him repeat it verbatim if unanswered.
+For a finding specifically measured by interruptions per 100 human turns, add
+`--metric interruptionsPer100HumanTurns`; this lets a later report compare periods. Do not
+attach that metric to a different habit or infer that a before/after change was caused by
+the intervention.
 
 When Dave answers yes or no, the calling session appends a separate decision row:
 

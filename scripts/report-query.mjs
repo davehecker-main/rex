@@ -64,7 +64,7 @@ function previousPeriod(query, timeZone) {
   const from = query.period.from;
   const to = query.period.to;
   if (query.periodUnit === 'month') {
-    const start = localParts(from, timeZone);
+    const start = localParts(new Date(from), timeZone);
     const ymd = `${start.year}-${String(start.month).padStart(2, '0')}-01`;
     return period(nextMonth(ymd, -1), ymd, timeZone);
   }
@@ -88,12 +88,15 @@ function detectProjects(text, projects, previous) {
 }
 
 function detectModels(text, models, previous) {
-  if (/\b(?:every|all) models\b/i.test(text)) return [];
+  if (/\b(?:every|all) models\b/i.test(text)) return { value: [] };
   const found = models.filter((model) => {
     const short = model.replace(/^claude-/, '').replace(/-/g, '[ -]?');
     return new RegExp(`\\b(?:claude[ -]?)?${short}\\b`, 'i').test(text);
   });
-  return found.length ? found : previous?.models ?? [];
+  if (found.length) return { value: found };
+  const named = text.match(/\b(?:claude[ -]?)?(opus|sonnet|haiku|fable)(?:[ -.]+\d+(?:[ -.]+\d+)?)?\b/i);
+  if (named) return { question: `Which available model did you mean by “${named[0]}”?` };
+  return { value: previous?.models ?? [] };
 }
 
 function clarification(question) {
@@ -113,6 +116,8 @@ export function resolveReportQuery(request, {
   const today = `${todayParts.year}-${String(todayParts.month).padStart(2, '0')}-${String(todayParts.day).padStart(2, '0')}`;
   const projectResult = detectProjects(text, projects, previous);
   if (projectResult.question) return clarification(projectResult.question);
+  const modelResult = detectModels(text, models, previous);
+  if (modelResult.question) return clarification(modelResult.question);
   if (/\b(?:sometime|recently|a while ago|around then)\b/i.test(text)) {
     return clarification('Which date range should I use?');
   }
@@ -124,8 +129,14 @@ export function resolveReportQuery(request, {
   if (reference && !previous && (previousComparison || /\b(?:show|open|compare)\b/i.test(text))) {
     return clarification('Which earlier report should I use?');
   }
-  const drillDown = /\b(?:sessions?|evidence)\s+behind\s+(?:that|this)\s+finding\b/i.test(text);
-  if (drillDown && !previous?.findingId) return clarification('Which finding should I show sessions for?');
+  const explicitFindingId = text.match(/\bfinding\s+((?:rex|metric|content)-[a-z0-9-]+|coverage)\b/i)?.[1] ?? null;
+  const drillDown = /\b(?:sessions?|evidence)\s+behind\s+(?:(?:that|this)\s+finding|finding\s+(?:[a-z0-9-]+))\b/i.test(text);
+  if (drillDown && explicitFindingId && previous?.findingIds && !previous.findingIds.includes(explicitFindingId)) {
+    return clarification(`I cannot find ${explicitFindingId} in the earlier report. Which finding ID should I use?`);
+  }
+  if (drillDown && !explicitFindingId && !previous?.findingId) {
+    return clarification(previous?.findingIds?.length ? `Which finding ID should I show sessions for? ${previous.findingIds.join(', ')}` : 'Which finding should I show sessions for?');
+  }
   const comparison = /\b(?:compare|versus|vs\.?|against)\b/i.test(text);
   const hasNewKind = /\b(?:usage|tokens?|cost|habits?|behavior|time sinks?|wasting time|interruptions?|recommend(?:ed|ations?)?|interventions?|changes rex)\b/i.test(text);
   const kind = drillDown ? 'sessions' : comparison ? 'comparison' :
@@ -141,11 +152,12 @@ export function resolveReportQuery(request, {
     periodUnit: selected?.unit ?? previous?.periodUnit ?? null,
     comparePeriod: null,
     projects: projectResult.value,
-    models: detectModels(text, models, previous),
+    models: modelResult.value,
     timeZone,
     contentAnalysis: metricsOnly ? false : explicitOptIn || previous?.contentAnalysis === true,
     surface: /\b(?:browser|web page)\b/i.test(text) ? 'browser' : /\b(?:terminal|tui)\b/i.test(text) ? 'terminal' : previous?.surface ?? 'default',
-    findingId: drillDown ? previous.findingId : previous?.findingId ?? null,
+    findingId: drillDown ? explicitFindingId ?? previous?.findingId ?? null : previous?.findingId ?? null,
+    findingIds: previous?.findingIds ?? [],
     currentSession: /\b(?:current|this) session\b/i.test(text) ||
       (previous?.currentSession === true && !/\b(?:(?:all|every) sessions|all available history|all history)\b/i.test(text)),
   };
@@ -155,7 +167,7 @@ export function resolveReportQuery(request, {
     query.history = previous.history;
     query.period = previous.period;
     query.periodUnit = previous.periodUnit;
-    query.comparePeriod = calendarPeriod('last month', today, timeZone).value;
+    query.comparePeriod = previousPeriod(previous, timeZone);
   } else if (comparison) {
     query.comparePeriod = previousPeriod(query, timeZone);
     if (!query.comparePeriod) return clarification('Which periods should I compare?');

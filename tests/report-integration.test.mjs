@@ -151,3 +151,122 @@ test('intervention question reads selected log entries and reports unknown effec
     assert.match(readFileSync(result.delivery.path, 'utf8'), /Batch questions/);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+test('logged comparison metric can show measured improvement without claiming causation', () => {
+  try {
+    fixture();
+    const projectFile = join(claudeRoot, 'projects', '-Users-david-Developer-ShareView', 'sessions.jsonl');
+    const before = priceable('before-request', 'before-session');
+    before.timestamp = '2026-08-10T10:00:00Z';
+    const user = (id, session, timestamp, content) => ({ type: 'user', uuid: id, sessionId: session,
+      timestamp, message: { content } });
+    writeFileSync(projectFile, [before,
+      user('before-user', 'before-session', '2026-08-10T09:00:00Z', 'Please investigate'),
+      user('before-interrupt', 'before-session', '2026-08-10T11:00:00Z', '[Request interrupted by user]'),
+      priceable('after-request', 'session-a'),
+      user('after-user', 'session-a', '2026-09-22T09:00:00Z', 'Please investigate again'),
+    ].map(JSON.stringify).join('\n'));
+    const log = join(root, 'interventions.jsonl');
+    writeFileSync(log, JSON.stringify({ at: '2026-08-15T10:00:00Z', finding: 'Interruptions',
+      advice: 'Batch asks', acted: 'yes', metric: 'interruptionsPer100HumanTurns' }) + '\n');
+    const result = runReportRequest('Did the changes Rex recommended last month help?', {
+      root: claudeRoot, interventionLog: log, outputDir, now: '2026-09-23T18:00:00Z',
+      timeZone: 'America/Los_Angeles', openBrowser: () => {},
+    });
+    assert.equal(result.assessment.interventions[0].laterEvidence.status, 'suggests-improvement');
+    assert.match(result.assessment.interventions[0].laterEvidence.caveat, /cannot establish causation/i);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('Rex judgment is embedded only with attributable sessions and bounded claims', () => {
+  try {
+    fixture();
+    const options = { root: claudeRoot, outputDir, now: '2026-09-23T18:00:00Z',
+      timeZone: 'America/Los_Angeles', openBrowser: () => {} };
+    const judgment = { summary: 'Two sessions need attention', findings: [{
+      label: 'Interruptions recur', status: 'metric-observation', sessions: ['session-a', 'session-b'],
+      evidence: [{ session: 'session-a', reference: 'metric:interruptions' }],
+      caveat: 'Counts do not establish avoidability.',
+    }] };
+    const result = runReportRequest('Review all available history for habits', { ...options, judgment });
+    assert.equal(result.assessment.rexJudgment.summary, judgment.summary);
+    assert.match(readFileSync(result.delivery.path, 'utf8'), /Two sessions need attention/);
+    assert.equal(result.context.query.findingId, null);
+    assert.deepEqual(result.context.query.findingIds, ['rex-1', 'coverage']);
+    assert.match(readFileSync(result.delivery.path, 'utf8'), /id="finding-rex-1"/);
+    assert.throws(() => runReportRequest('Review all available history for habits', { ...options,
+      judgment: { ...judgment, findings: [{ ...judgment.findings[0], sessions: ['invented-session'] }] } }), /unknown session/);
+    assert.throws(() => runReportRequest('Review all available history for habits', { ...options,
+      judgment: { ...judgment, findings: [{ ...judgment.findings[0], status: 'established-behavior' }] } }), /content opt-in/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('opted-in semantic judgment must cite a real transcript message', () => {
+  try {
+    fixture();
+    const projectFile = join(claudeRoot, 'projects', '-Users-david-Developer-ShareView', 'sessions.jsonl');
+    const existing = readFileSync(projectFile, 'utf8');
+    writeFileSync(projectFile, existing + '\n' + JSON.stringify({ type: 'user', uuid: 'real-turn',
+      sessionId: 'session-a', timestamp: '2026-09-22T09:00:00Z', message: { content: 'Why are we here?' } }));
+    const options = { root: claudeRoot, outputDir, now: '2026-09-23T18:00:00Z',
+      timeZone: 'America/Los_Angeles', openBrowser: () => {} };
+    const judgment = { summary: 'A repeated question', findings: [{ label: 'Question loop',
+      status: 'established-behavior', sessions: ['session-a'],
+      evidence: [{ session: 'session-a', reference: 'invented-turn' }], caveat: 'No elapsed human time inferred.' }] };
+    assert.throws(() => runReportRequest('Analyze transcript content for habits', { ...options, judgment }), /unknown transcript reference/);
+    judgment.findings[0].evidence[0].reference = 'real-turn';
+    const result = runReportRequest('Analyze transcript content for habits', { ...options, judgment });
+    assert.equal(result.assessment.contentAnalysis.status, 'supported');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('behavior report command invokes read-only Rex judgment before browser delivery', () => {
+  try {
+    fixture();
+    const bin = join(root, 'bin');
+    mkdirSync(bin, { recursive: true });
+    const opener = join(bin, process.platform === 'darwin' ? 'open' : 'xdg-open');
+    writeFileSync(opener, '#!/bin/sh\nprintf "%s" "$1" > "$REX_OPEN_CAPTURE"\n');
+    chmodSync(opener, 0o700);
+    const codex = join(bin, 'codex');
+    writeFileSync(codex, '#!/bin/sh\nprintf "%s\\n" "$@" > "$REX_JUDGE_CAPTURE"\nwhile [ "$#" -gt 0 ]; do if [ "$1" = "-o" ]; then shift; answer=$1; fi; shift; done\nprintf \'{"summary":"Rex reviewed the measured sessions","findings":[]}\' > "$answer"\n');
+    chmodSync(codex, 0o700);
+    const request = join(root, 'request.txt');
+    writeFileSync(request, 'Review all available history for habits');
+    const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`,
+      XDG_DATA_HOME: join(root, 'state'), REX_OPEN_CAPTURE: join(root, 'opened'),
+      REX_JUDGE_CAPTURE: join(root, 'judged') };
+    const command = join(process.cwd(), 'scripts', 'rex-report.sh');
+    const completed = spawnSync('sh', [command, request, '--root', claudeRoot], { encoding: 'utf8', env });
+    assert.equal(completed.status, 0, completed.stderr);
+    assert.match(readFileSync(join(root, 'judged'), 'utf8'), /--sandbox\nread-only/);
+    const context = JSON.parse(readFileSync(join(root, 'state', 'rex', 'report-context.json'), 'utf8'));
+    assert.equal(context.judgment.summary, 'Rex reviewed the measured sessions');
+    assert.match(readFileSync(context.reportPath, 'utf8'), /Rex reviewed the measured sessions/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('prepared evidence excludes transcript text by default and only exposes a source path after opt-in', () => {
+  try {
+    fixture();
+    const projectFile = join(claudeRoot, 'projects', '-Users-david-Developer-ShareView', 'sessions.jsonl');
+    writeFileSync(projectFile, readFileSync(projectFile, 'utf8') + '\n' + JSON.stringify({
+      type: 'user', uuid: 'private-turn', sessionId: 'session-a', timestamp: '2026-09-22T09:00:00Z',
+      message: { content: 'SECRET_TRANSCRIPT_CONTENT?' },
+    }));
+    const cli = join(process.cwd(), 'scripts', 'rex-report.mjs');
+    const evidencePath = join(root, 'evidence.json');
+    const ordinary = spawnSync(process.execPath, [cli, '--root', claudeRoot,
+      '--prepare', evidencePath, 'Review all available history for habits'], { encoding: 'utf8' });
+    assert.equal(ordinary.status, 0, ordinary.stderr);
+    let evidence = readFileSync(evidencePath, 'utf8');
+    assert.doesNotMatch(evidence, /SECRET_TRANSCRIPT_CONTENT/);
+    assert.equal(JSON.parse(evidence).contentSources, null);
+    const opted = spawnSync(process.execPath, [cli, '--root', claudeRoot,
+      '--prepare', evidencePath, 'Analyze transcript content for recurring habits'], { encoding: 'utf8' });
+    assert.equal(opted.status, 0, opted.stderr);
+    evidence = readFileSync(evidencePath, 'utf8');
+    assert.doesNotMatch(evidence, /SECRET_TRANSCRIPT_CONTENT/);
+    assert.match(JSON.parse(evidence).contentSources, /projects$/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

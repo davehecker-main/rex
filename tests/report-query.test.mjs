@@ -48,6 +48,13 @@ test('follow-ups preserve scope and resolve previous month from prior period', (
   assert.deepEqual(result.query.comparePeriod, { from: '2026-08-01T07:00:00.000Z', to: '2026-09-01T07:00:00.000Z' });
 });
 
+test('previous month follow-up is relative to the report month, not today', () => {
+  const prior = resolveReportQuery('Show ShareView usage last month', context).query;
+  const result = resolveReportQuery('compare that with the previous month', { ...context, previous: prior });
+  assert.deepEqual(result.query.period, prior.period);
+  assert.deepEqual(result.query.comparePeriod, { from: '2026-07-01T07:00:00.000Z', to: '2026-08-01T07:00:00.000Z' });
+});
+
 test('follow-up filters project and opens browser without losing report scope', () => {
   const prior = resolveReportQuery('Show all usage last month', context).query;
   const narrowed = resolveReportQuery('only ShareView', { ...context, previous: prior });
@@ -79,6 +86,15 @@ test('session drill-down requires a prior finding reference', () => {
   assert.deepEqual(follow.query.period, prior.period);
 });
 
+test('ambiguous finding follow-up asks for an ID and an explicit ID selects it', () => {
+  const prior = { ...resolveReportQuery('Show usage this week', context).query,
+    findingId: null, findingIds: ['rex-1', 'coverage'] };
+  assert.equal(resolveReportQuery('show sessions behind that finding', { ...context, previous: prior }).status, 'clarification');
+  const selected = resolveReportQuery('show sessions behind finding rex-1', { ...context, previous: prior });
+  assert.equal(selected.status, 'resolved');
+  assert.equal(selected.query.findingId, 'rex-1');
+});
+
 test('content analysis requires explicit opt-in and persists in follow-up context', () => {
   const ordinary = resolveReportQuery('Which habits keep wasting time?', context);
   assert.equal(ordinary.query.contentAnalysis, false);
@@ -94,6 +110,7 @@ test('clarifies material ambiguity and unsupported named project', () => {
   assert.equal(resolveReportQuery('Show usage for Atlas last month', context).status, 'clarification');
   assert.equal(resolveReportQuery('compare that with last month', context).status, 'clarification');
   assert.equal(resolveReportQuery('Show all my usage sometime recently', context).status, 'clarification');
+  assert.equal(resolveReportQuery('Show Claude Opus 6 usage', context).status, 'clarification');
 });
 
 test('does not invent a range for an unqualified request', () => {

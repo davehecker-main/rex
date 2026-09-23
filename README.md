@@ -66,6 +66,8 @@ scripts/
   report-browser.mjs    browser delivery and terminal fallback
   report-runner.mjs     on-demand report orchestration
   rex-report.mjs        command-line report entry point
+  rex-report.sh         report flow with read-only Rex judgment
+  rex-report-judge.sh   evidence prompt and Codex invocation
 ```
 
 There is no `claude/agents/rex.md`, deliberately. Rex is not a subagent of the model he
@@ -103,6 +105,11 @@ timezone shown in the report. An explicit request for transcript content analysi
 to that mode; without supplied attributable evidence it reports insufficient evidence,
 and ordinary reports contain no transcript text. The runner does not infer actual billed
 spending from API-equivalent rates or human work time from session elapsed time.
+For behavior, comparison, and intervention requests through `/rex`, the installed command
+uses `scripts/rex-report.sh` to prepare a private structured evidence file, consult Rex via
+read-only Codex, validate his cited sessions, and then deliver the browser report. If the
+Codex call is unavailable, the measured report still opens and says judgment was unavailable.
+The direct Node command above delivers deterministic metrics without a model consult.
 
 `codex exec` has no `--agent` flag and does not read `~/.codex/agents/`, so `rex-consult.sh`
 extracts the persona from `rex.toml` and puts it in the prompt. The installed `rex.toml` is
@@ -173,6 +180,10 @@ memory. One row per consult records what he found, what he advised, and whether 
 acted on; a separate row records each decision.
 
 A finding can carry `habit`, a stable lowercase slug Rex reuses for the same behavior.
+It can also carry `--metric interruptionsPer100HumanTurns` when that measurable rate is the
+finding's actual basis; later intervention reports can compare it before and after while
+keeping causation unknown. Older rows without a metric remain valid and yield unknown later
+evidence.
 Older rows without it remain readable but do not count as sightings. On a second keyed
 sighting without a decision, Rex asks Dave once whether to make a stated one-line rule or
 drop the habit; the caller logs that exact question as `advice`. An unanswered question is
