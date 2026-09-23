@@ -124,13 +124,21 @@ the distinction reaches Rex every time.
 
 Rex cold-starts on every consult and remembers nothing. `interventions.jsonl` — at
 `$XDG_DATA_HOME/rex/`, or `~/.local/share/rex/`, or wherever `REX_LOG` points — is his
-memory. One row per consult: what he found, what he advised, whether it was acted on.
+memory. One row per consult records what he found, what he advised, and whether it was
+acted on; a separate row records each decision.
 
-This is what makes "the same habit, again" visible. A repeat finding that never got acted on
-is the most useful thing in the log, and Rex is instructed to say so when he sees one.
+A finding can carry `habit`, a stable lowercase slug Rex reuses for the same behavior.
+Older rows without it remain readable but do not count as sightings. On a second keyed
+sighting without a decision, Rex asks Dave once whether to make a stated one-line rule or
+drop the habit; the caller logs that exact question as `advice`. An unanswered question is
+repeated verbatim. A separate row with `--habit <slug> --decision rule|drop` records Dave's
+answer; `--rule` can hold the rule text or its location. A dropped habit is omitted on later
+consults, and a recurrence after `rule` is reported in one line without fresh counsel.
 
-Log the healthy verdicts too, with `--finding none`. A log holding only the sessions that
-went badly cannot tell you whether Rex is right about the ones that went well.
+Log healthy or declined findings with `--finding none` and no habit, so they never trigger
+the question. A log holding only bad sessions cannot show whether Rex is right about the
+good ones. Rex remains read-only; the calling session writes the log and carries a chosen
+rule into the project's own process.
 
 ## Read-only, always
 

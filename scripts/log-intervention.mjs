@@ -33,9 +33,29 @@ if (argv.includes("--list")) {
 }
 
 const finding = arg("finding");
-if (!finding) {
+const habit = arg("habit");
+const decision = arg("decision");
+const rule = arg("rule");
+if (decision !== undefined && !["rule", "drop"].includes(decision)) {
+  console.error(`--decision must be rule or drop (got "${decision}")`);
+  process.exit(2);
+}
+if (habit !== undefined && !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(habit)) {
+  console.error("--habit must be a lowercase slug");
+  process.exit(2);
+}
+if (decision && (!habit || finding || (decision === "drop" && rule))) {
+  console.error("a decision requires --habit, no --finding, and --rule only with rule");
+  process.exit(2);
+}
+if (rule && !decision) {
+  console.error("--rule requires --decision rule");
+  process.exit(2);
+}
+if (!finding && !decision) {
   console.error(
-    'usage: log-intervention.mjs --session <id> --finding "<diagnosis>" --advice "<correction>" --acted <yes|no|partial>\n' +
+    'usage: log-intervention.mjs --session <id> --finding "<diagnosis>" [--habit <slug>] --advice "<correction>" --acted <yes|no|partial>\n' +
+      '       log-intervention.mjs --habit <slug> --decision rule|drop [--rule "<text or location>"]\n' +
       "       log-intervention.mjs --list",
   );
   process.exit(2);
@@ -51,10 +71,13 @@ const row = {
   at: new Date().toISOString(),
   session: arg("session") ?? null,
   repo: arg("repo") ?? null,
-  finding,
+  finding: finding ?? null,
   advice: arg("advice") ?? null,
   acted,
 };
+if (habit && (decision || finding !== "none")) row.habit = habit;
+if (decision) row.decision = decision;
+if (rule) row.rule = rule;
 
 mkdirSync(dirname(LOG), { recursive: true });
 appendFileSync(LOG, `${JSON.stringify(row)}\n`);
