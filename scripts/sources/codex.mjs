@@ -40,17 +40,10 @@ export function codexSources(root, from, to) {
     dataHeld, limit, from, to, timestamp: (r) => r.timestamp ?? r.ts, facts,
   });
   const sessionFacts = (rows) => {
-    const tokens = { input: 0, output: 0, reasoningOutputSubset: 0 };
     let completedTurns = 0; let aborts = 0; let launches = 0;
     let durationMs = 0; let firstTokenLatencyMs = 0; let latencySamples = 0;
     const origins = {}; const observedModels = {}; const observedEfforts = {};
     for (const row of rows) {
-      if (row.type === 'token_usage_record') {
-        const usage = row.payload?.usage ?? {};
-        tokens.input += Number(usage.input_tokens) || 0;
-        tokens.output += Number(usage.output_tokens) || 0;
-        tokens.reasoningOutputSubset += Number(usage.reasoning_output_tokens) || 0;
-      }
       if (row.type === 'event_msg' && row.payload?.type === 'task_complete') {
         completedTurns++;
         durationMs += Number(row.payload.duration_ms) || 0;
@@ -64,7 +57,8 @@ export function codexSources(root, from, to) {
         launches++;
         const origin = row.payload?.source || row.payload?.originator || 'unknown';
         const rawCategory = typeof origin === 'string' ? origin : origin?.subagent ? 'spawned' : origin?.type ?? 'unknown';
-        const category = /^(cli|exec|ide|guardian|spawned|unknown)$/i.test(rawCategory) ? rawCategory.toLowerCase() : 'other';
+        const category = rawCategory === 'vscode' ? 'ide' :
+          /^(cli|exec|ide|guardian|spawned|mcp|unknown)$/i.test(rawCategory) ? rawCategory.toLowerCase() : 'other';
         origins[category] = (origins[category] ?? 0) + 1;
       }
       if (row.type === 'turn_context') {
@@ -72,13 +66,13 @@ export function codexSources(root, from, to) {
         const effort = effortName(row.payload?.effort); observedEfforts[effort] = (observedEfforts[effort] ?? 0) + 1;
       }
     }
-    return { tokens, completedTurns, aborts, launches, origins, observedModels, observedEfforts,
+    return { completedTurns, aborts, launches, origins, observedModels, observedEfforts,
       durationMs, firstTokenLatencyMs, latencySamples };
   };
   const sessions = event('sessions', 'sessions', 'tokens, turns, origins and aborts',
-    'Codex usage convention; cached input is included in input, reasoning output in output. Do not add Claude tokens.', sessionFacts);
+    'Session facts exclude tokens. Use the deduplicated Codex provider token table; MCP is an invocation source, not necessarily a separate user session.', sessionFacts);
   const archived = event('archived-sessions', 'archived_sessions', 'archived session events',
-    'Archives can overlap live sessions; do not add provider totals without deduplication.', sessionFacts);
+    'Archives can overlap live sessions. Session facts exclude tokens; use the deduplicated Codex provider token table.', sessionFacts);
   const history = event('history', 'history.jsonl', 'prompt history', 'History is not a complete session census.', (rows) => ({ entries: rows.length }));
   const configFound = discover(join(root, 'config.toml'));
   let configuredModel = null; let configuredEffort = null;

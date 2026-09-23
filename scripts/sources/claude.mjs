@@ -84,7 +84,7 @@ export function claudeSources(root, from, to) {
   const jobs = recordsSource({ id: 'claude.jobs', path: join(root, 'jobs'), extensions: ['timeline.jsonl'],
     kind: 'event', dataHeld: 'job lifecycle events', limit: 'Timeline events, not a complete execution census.',
     from, to, timestamp: (row) => row.at ?? row.timestamp,
-    facts: (rows) => ({ events: rows.length, completed: rows.filter((row) => row.state === 'complete').length,
+    facts: (rows) => ({ events: rows.length, completed: rows.filter((row) => row.state === 'done').length,
       failed: rows.filter((row) => row.state === 'failed').length }) });
   const jobState = snapshot('job-state', 'jobs', 'current job state', 'Current snapshot; timeline events are counted separately.');
   return [projects,
