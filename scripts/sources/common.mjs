@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, realpathSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 export const ms = (value) => {
@@ -11,7 +11,8 @@ export const within = (value, from, to) => {
 };
 
 export function discover(path, extensions = null) {
-  const result = { files: [], missing: 0, dangling: 0, unreadable: 0 };
+  const result = { files: [], missing: 0, dangling: 0, unreadable: 0, cycles: 0 };
+  const visited = new Set();
   function visit(current) {
     let info;
     try { info = lstatSync(current); }
@@ -22,6 +23,11 @@ export function discover(path, extensions = null) {
       catch { result.unreadable++; return; }
     }
     if (info.isDirectory()) {
+      let canonical;
+      try { canonical = realpathSync(current); }
+      catch { result.unreadable++; return; }
+      if (visited.has(canonical)) { result.cycles++; return; }
+      visited.add(canonical);
       try { for (const name of readdirSync(current)) visit(join(current, name)); }
       catch { result.unreadable++; }
     } else if (info.isFile() && (!extensions || extensions.some((ext) => current.endsWith(ext)))) {
@@ -49,10 +55,10 @@ export function parseRecords(path) {
 }
 
 export function coverage(discovery, { rows = 0, rowsInWindow = null, unparseable = 0 } = {}) {
-  const status = discovery.dangling || discovery.unreadable || unparseable ? 'unparseable' :
+  const status = discovery.dangling || discovery.unreadable || discovery.cycles || unparseable ? 'unparseable' :
     discovery.missing && !discovery.files.length ? 'missing' : 'readable';
   return { status, files: discovery.files.length, missing: discovery.missing,
-    dangling: discovery.dangling, unreadable: discovery.unreadable, unparseable, rows, rowsInWindow };
+    dangling: discovery.dangling, unreadable: discovery.unreadable, cycles: discovery.cycles ?? 0, unparseable, rows, rowsInWindow };
 }
 
 export function recordsSource({ id, path, extensions, kind, dataHeld, limit, from, to, timestamp, facts = () => ({}) }) {
