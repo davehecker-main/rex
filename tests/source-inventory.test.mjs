@@ -48,7 +48,7 @@ test('keeps Codex token convention apart from Claude and treats empty SQLite as 
       payload: { usage: { input_tokens: 10, output_tokens: 4, reasoning_output_tokens: 2 } } }) + '\n');
   file(join(options.codexRoot, 'logs_2.sqlite'), '');
   const report = collectSourceInventory(options);
-  assert.deepEqual(source(report, 'codex.sessions').facts.tokens, { input: 10, output: 4, reasoningOutputSubset: 2 });
+  assert.equal('tokens' in source(report, 'codex.sessions').facts, false);
   assert.equal(source(report, 'codex.logs').coverage.status, 'unparseable');
   assert.equal(report.providerTokens.codex.output, 4);
   assert.equal('total' in report.providerTokens, false);
@@ -70,7 +70,7 @@ test('lists candidate install milestones and labels live claims as a snapshot', 
 test('reads job timelines, numeric history timestamps, and installed-date window', () => {
   const options = fixture();
   file(join(options.claudeRoot, 'jobs', 'a', 'timeline.jsonl'),
-    '{"at":"2026-09-21T10:00:00Z","state":"complete","text":"DO_NOT_REPORT"}\n');
+    '{"at":"2026-09-21T10:00:00Z","state":"done","text":"DO_NOT_REPORT"}\n');
   file(join(options.claudeRoot, 'history.jsonl'), JSON.stringify({ timestamp: Date.parse('2026-09-21'), display: 'DO_NOT_REPORT' }) + '\n');
   file(join(options.claudeRoot, 'commands', 'rex.md'), 'installed');
   const report = collectSourceInventory({ ...options, from: 'since-installed' });
@@ -79,6 +79,7 @@ test('reads job timelines, numeric history timestamps, and installed-date window
   assert.equal(JSON.stringify(report).includes('DO_NOT_REPORT'), false);
   const dated = collectSourceInventory(options);
   assert.equal(source(dated, 'claude.jobs').coverage.rowsInWindow, 1);
+  assert.equal(source(dated, 'claude.jobs').facts.completed, 1);
   assert.equal(source(dated, 'claude.history').coverage.rowsInWindow, 1);
 });
 
@@ -90,10 +91,18 @@ test('deduplicates Codex archive tokens and classifies nested subagents', () => 
     payload: { session_id: 's1', response_id: id, usage: { input_tokens: n, output_tokens: n / 2, reasoning_output_tokens: 1 } } });
   file(join(options.codexRoot, 'sessions', 'a.jsonl'), [meta, context, usage('r1', 10)].map(JSON.stringify).join('\n'));
   file(join(options.codexRoot, 'archived_sessions', 'b.jsonl'), [usage('r1', 10), usage('r2', 20)].map(JSON.stringify).join('\n'));
+  file(join(options.codexRoot, 'sessions', 'origins.jsonl'), [
+    { timestamp: '2026-09-21T10:00:00Z', type: 'session_meta', payload: { source: 'vscode' } },
+    { timestamp: '2026-09-21T10:00:00Z', type: 'session_meta', payload: { source: 'mcp' } },
+  ].map(JSON.stringify).join('\n'));
   file(join(options.codexRoot, 'config.toml'), 'model = "gpt-6-sol"\nmodel_reasoning_effort = "high"\nsecret = "DO_NOT_REPORT"\n');
   const report = collectSourceInventory(options);
   assert.deepEqual(report.providerTokens.codex, { input: 30, output: 15, reasoningOutputSubset: 2 });
   assert.equal(source(report, 'codex.sessions').facts.origins.spawned, 1);
+  assert.equal(source(report, 'codex.sessions').facts.origins.ide, 1);
+  assert.equal(source(report, 'codex.sessions').facts.origins.mcp, 1);
+  assert.equal('tokens' in source(report, 'codex.sessions').facts, false);
+  assert.equal('tokens' in source(report, 'codex.archived-sessions').facts, false);
   assert.equal(source(report, 'codex.config').facts.observedModelMatchesConfig, true);
   assert.equal(source(report, 'codex.config').facts.observedEffortMatchesConfig, true);
   assert.equal(JSON.stringify(report).includes('DO_NOT_REPORT'), false);
