@@ -12,8 +12,8 @@ He runs on a different model from the agent he is diagnosing, and that is the en
 An agent asked to review its own session reviews its own summary of that session. Rex reads
 the evidence instead.
 
-Companion to [sheldon-debbie](https://github.com/davehecker-main/sheldon-debbie) and
-[radar](https://github.com/davehecker-main/radar). Sheldon rules on what is true. Debbie
+Companion to [sheldon-debbie](https://github.com/sempervire/sheldon-debbie) and
+[radar](https://github.com/sempervire/radar). Sheldon rules on what is true. Debbie
 rules on what is worth doing. Radar decides what to do next. Rex looks after the agent doing
 it.
 
