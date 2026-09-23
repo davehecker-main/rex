@@ -19,11 +19,14 @@ function readContext(path) {
 async function main() {
   const statePath = option('--context') ?? join(process.env.XDG_DATA_HOME ?? join(homedir(), '.local', 'share'), 'rex', 'report-context.json');
   const root = option('--root') ?? join(homedir(), '.claude');
+  const codexRoot = option('--codex-root') ?? undefined;
+  const rexRoot = option('--rex-root') ?? undefined;
+  const shareViewRoot = option('--shareview-root') ?? undefined;
   const file = option('--request-file');
   const queryFile = option('--query-file');
   const prepareFile = option('--prepare');
   const judgmentFile = option('--judgment-file');
-  const excluded = new Set(['--context', '--root', '--request-file', '--query-file', '--prepare', '--judgment-file']);
+  const excluded = new Set(['--context', '--root', '--codex-root', '--rex-root', '--shareview-root', '--request-file', '--query-file', '--prepare', '--judgment-file']);
   const words = [];
   for (let i = 2; i < process.argv.length; i++) {
     if (excluded.has(process.argv[i])) { i++; continue; }
@@ -42,7 +45,7 @@ async function main() {
     });
   const queryOverride = queryFile ? JSON.parse(readFileSync(queryFile, 'utf8')) : null;
   const judgment = judgmentFile ? JSON.parse(readFileSync(judgmentFile, 'utf8')) : null;
-  const result = runReportRequest(request, { root, previous: readContext(statePath), queryOverride,
+  const result = runReportRequest(request, { root, codexRoot, rexRoot, shareViewRoot, previous: readContext(statePath), queryOverride,
     judgment, deliver: !prepareFile });
   if (result.status === 'clarification') {
     process.stdout.write(`${result.question}\n`);

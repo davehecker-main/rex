@@ -12,7 +12,7 @@ const metric = (row) => ({
   interruptions: row.interruptions ?? null,
 });
 
-export function buildReportView(report, { compareTo, assessment, query, projectNames = [], findings = [], finding = null } = {}) {
+export function buildReportView(report, { compareTo, assessment, query, projectNames = [], findings = [], finding = null, sourceInventory = null } = {}) {
   if (!report?.basis || !report?.summary || !report?.coverage || !report?.groups) {
     throw new TypeError('report requires basis, summary, coverage, and groups');
   }
@@ -29,7 +29,7 @@ export function buildReportView(report, { compareTo, assessment, query, projectN
     ...Object.entries(coverage.unpricedByReason ?? {}).map(([reason, value]) => [`Unpriced: ${reason}`, value]),
   ].filter(([, value]) => value > 0).map(([label, value]) => ({ label, value }));
   const view = {
-    title: 'Rex usage report',
+    title: sourceInventory ? 'Rex source inventory' : 'Rex usage report',
     scope: { source: basis.source, from: basis.from, toExclusive: basis.toExclusive,
       timezone: 'UTC', calendarTimeZone: query?.timeZone ?? 'UTC',
       sessions: sections[3].rows.length, files: coverage.files ?? 0,
@@ -53,6 +53,7 @@ export function buildReportView(report, { compareTo, assessment, query, projectN
     assessment: assessment ?? null,
     findings,
     finding,
+    sourceInventory,
   };
   if (compareTo) {
     view.comparison = {
@@ -83,7 +84,7 @@ const cells = (row) => [row.key, number(row.requests), number(row.tokens), money
 export function renderReportTerminal(view) {
   const lines = [view.title, '='.repeat(view.title.length),
     `Scope: ${scopeText(view.scope)}`, `Source: ${view.scope.source}; ${number(view.scope.files)} files; ${number(view.scope.sessions)} sessions`,
-    `Metered requests: ${number(view.summary.requests)} (${number(view.summary.subagentRequests)} subagent); tokens: ${number(view.summary.tokens)}`,
+    `Metered requests: ${number(view.summary.requests)} (${number(view.summary.subagentRequests)} subagent); ${view.sourceInventory ? 'Claude ' : ''}tokens: ${number(view.summary.tokens)}`,
     `Human turns: ${number(view.summary.humanTurns)}; assistant turns: ${number(view.summary.assistantTurns)}; tool calls: ${number(view.summary.toolCalls)}; interruptions: ${number(view.summary.interruptions)}`,
     `Estimated API equivalent: ${costText(view.cost)}`, `Actual spending: unavailable`,
     `Assumption: ${view.cost.meaning}; rate snapshot ${view.cost.priceAsOf} (${view.cost.priceSource})`,
@@ -111,7 +112,37 @@ export function renderReportTerminal(view) {
     for (const row of section.rows) lines.push(cells(row).join(' | '));
     if (!section.rows.length) lines.push('No records');
   }
+  if (view.sourceInventory) lines.push('', ...inventoryTerminal(view.sourceInventory));
   return lines.join('\n') + '\n';
+}
+
+function tokenRows(inventory) {
+  const claude = inventory.providerTokens.claude;
+  const codex = inventory.providerTokens.codex;
+  return [
+    ['Claude provider tokens', claude ? `input ${number(claude.input)}, output ${number(claude.output)}, cache write 5m ${number(claude.cacheWrite5m)}, cache write 1h ${number(claude.cacheWrite1h)}, cache read ${number(claude.cacheRead)}` : 'unavailable'],
+    ['Codex provider tokens', codex ? `input ${number(codex.input)}, output ${number(codex.output)}, reasoning output subset ${number(codex.reasoningOutputSubset)}` : 'unavailable'],
+  ];
+}
+
+const sourceRows = (source) => source.kind === 'event' ? source.coverage.rowsInWindow ?? 'unknown' :
+  source.coverage.rows || source.coverage.files || 0;
+
+function inventoryTerminal(inventory) {
+  const lines = ['Source inventory', `Selected range: ${inventory.window.from ?? 'first available'} to ${inventory.window.toExclusive ?? 'latest available'} (exclusive); requested ${inventory.window.requestedFrom ?? 'all available'}`,
+    `Installation milestone: ${inventory.installMilestones.chosen ? `${inventory.installMilestones.chosen.source} at ${inventory.installMilestones.chosen.at}` : 'unavailable'}`,
+    `Milestone limit: ${inventory.installMilestones.limit}`,
+    ...tokenRows(inventory).map(([name, value]) => `${name}: ${value}`),
+    'Source | Type | Data held | Event rows / snapshot files or rows | Coverage | Limit'];
+  for (const source of inventory.sources) lines.push(`${source.id} | ${source.kind} | ${source.dataHeld} | ${sourceRows(source)} | ${source.coverage.status} (missing ${number(source.coverage.missing)}, dangling ${number(source.coverage.dangling)}, unreadable ${number(source.coverage.unreadable)}, unparseable ${number(source.coverage.unparseable)}) | ${source.limit}`);
+  lines.push(`Unavailable: ${inventory.unavailable.join(', ')}`);
+  return lines;
+}
+
+function inventoryHtml(inventory) {
+  const rows = inventory.sources.map((source) => `<tr><td>${escapeHtml(source.id)}</td><td>${escapeHtml(source.kind === 'event' ? 'Event' : 'Snapshot')}</td><td>${escapeHtml(source.dataHeld)}</td><td>${escapeHtml(sourceRows(source))}</td><td>${escapeHtml(`${source.coverage.status}; files ${source.coverage.files}; missing ${source.coverage.missing}; dangling ${source.coverage.dangling}; unreadable ${source.coverage.unreadable}; unparseable ${source.coverage.unparseable}`)}</td><td>${escapeHtml(source.limit)}</td></tr>`).join('');
+  const milestone = inventory.installMilestones.chosen;
+  return `<section><h2>Source inventory</h2><p>Selected range: ${escapeHtml(inventory.window.from ?? 'first available')} to ${escapeHtml(inventory.window.toExclusive ?? 'latest available')} (exclusive); requested ${escapeHtml(inventory.window.requestedFrom ?? 'all available')}.</p><p>Installation milestone: ${milestone ? `${escapeHtml(milestone.source)} at ${escapeHtml(milestone.at)}` : 'unavailable'}. ${escapeHtml(inventory.installMilestones.limit)}</p><p>Candidate milestones: ${escapeHtml(inventory.installMilestones.candidates.map((row) => `${row.source} ${row.at}`).join('; ') || 'none')}.</p><table><thead><tr><th>Provider</th><th>Token convention</th></tr></thead><tbody>${tokenRows(inventory).map(([name, value]) => `<tr><td>${escapeHtml(name)}</td><td>${escapeHtml(value)}</td></tr>`).join('')}</tbody></table><div class="scroll"><table><thead><tr><th>Source</th><th>Type</th><th>Data held</th><th>Event rows / snapshot files or rows</th><th>Coverage (Missing, dangling, unreadable, unparseable)</th><th>Limit</th></tr></thead><tbody>${rows}</tbody></table></div><p>Unavailable: ${escapeHtml(inventory.unavailable.join(', '))}.</p></section>`;
 }
 
 function table(section) {
@@ -137,9 +168,9 @@ export function renderReportHtml(view) {
     :root{color-scheme:light dark;font:16px system-ui,sans-serif}body{max-width:1100px;margin:auto;padding:2rem;line-height:1.5}h1{margin-bottom:.2rem}.sub{color:gray;margin-top:0}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:1rem}.card,section{border:1px solid #9996;border-radius:.6rem;padding:1rem;margin:1rem 0}.card strong{display:block;font-size:1.5rem}.scroll{overflow:auto}table{border-collapse:collapse;width:100%}th,td{text-align:left;padding:.45rem;border-bottom:1px solid #9996}th{white-space:nowrap}td:first-child{overflow-wrap:anywhere}label{display:block;margin:1rem 0}input{font:inherit;padding:.5rem;width:min(100%,25rem)}details{margin-top:1rem}.chart{margin:1rem 0}.bar-row{display:grid;grid-template-columns:7rem 1fr 3rem;gap:.5rem;align-items:center}.bar-row meter{width:100%}
   </style></head><body><main><h1>${escapeHtml(view.title)}</h1><p class="sub">${escapeHtml(scopeText(view.scope))}</p>
   <p>${escapeHtml(view.scope.source)} · ${number(view.scope.files)} files · ${number(view.scope.sessions)} supporting sessions</p><p>Projects: ${escapeHtml(view.scope.projects?.length ? view.scope.projects.join(', ') : 'all available')}; models: ${escapeHtml(view.scope.models?.length ? view.scope.models.join(', ') : 'all available')}</p>${view.scope.interventionPeriod ? `<p>Interventions selected: ${escapeHtml(view.scope.interventionPeriod.from)} to ${escapeHtml(view.scope.interventionPeriod.to)} (exclusive).</p>` : ''}${view.scope.behaviorMeaning ? `<p>${escapeHtml(view.scope.behaviorMeaning)}</p>` : ''}
-  <div class="cards"><div class="card">Metered requests<strong>${number(view.summary.requests)}</strong></div><div class="card">Tokens<strong>${number(view.summary.tokens)}</strong></div><div class="card">Tool calls<strong>${number(view.summary.toolCalls)}</strong></div><div class="card">API equivalent<strong>${escapeHtml(costText(view.cost))}</strong></div></div>
+  <div class="cards"><div class="card">Metered requests<strong>${number(view.summary.requests)}</strong></div><div class="card">${view.sourceInventory ? 'Claude metered tokens' : 'Tokens'}<strong>${number(view.summary.tokens)}</strong></div><div class="card">Tool calls<strong>${number(view.summary.toolCalls)}</strong></div><div class="card">API equivalent<strong>${escapeHtml(costText(view.cost))}</strong></div></div>
   <section><h2>Scope and assumptions</h2><p>Human turns: ${number(view.summary.humanTurns)}; assistant turns: ${number(view.summary.assistantTurns)}; interruptions: ${number(view.summary.interruptions)}; subagent requests: ${number(view.summary.subagentRequests)}.</p><p>${escapeHtml(view.cost.meaning)}. Rates as of ${escapeHtml(view.cost.priceAsOf)}: <a href="${escapeHtml(view.cost.priceSource)}">pricing source</a>. Actual spending is unavailable.</p><details><summary>Coverage details</summary><ul>${gaps}</ul><p>Duplicate rows: ${number(view.coverage.duplicateRows)}.</p></details></section>
-  ${comparison}${assessment}<label>Filter rows <input type="search" id="filter" aria-label="Filter report rows"></label>
+  ${comparison}${assessment}${view.sourceInventory ? inventoryHtml(view.sourceInventory) : ''}<label>Filter rows <input type="search" id="filter" aria-label="Filter report rows"></label>
   ${view.sections.map(table).join('')}
   <script>document.getElementById('filter').addEventListener('input',e=>{const q=e.target.value.toLowerCase();for(const row of document.querySelectorAll('tr[data-search]'))row.hidden=!row.dataset.search.includes(q)});</script>
   </main></body></html>`;

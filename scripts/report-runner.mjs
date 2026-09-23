@@ -7,6 +7,7 @@ import { assessReport } from './report-assessment.mjs';
 import { buildReportView } from './report-view.mjs';
 import { deliverReport } from './report-browser.mjs';
 import { collectSemanticEvidence, collectContentReferences } from './report-content.mjs';
+import { collectSourceInventory } from './source-inventory.mjs';
 
 export function discoverProjects(root) {
   let entries;
@@ -25,7 +26,7 @@ function interventions(path) {
 }
 
 function validateOverride(value, request, projects, timeZone) {
-  if (!value || typeof value !== 'object' || !['usage', 'behavior', 'comparison', 'intervention', 'sessions'].includes(value.kind)) {
+  if (!value || typeof value !== 'object' || !['usage', 'behavior', 'comparison', 'intervention', 'sessions', 'source-inventory'].includes(value.kind)) {
     throw new Error('structured query needs a supported kind');
   }
   const selectedProjects = value.projects ?? [];
@@ -45,7 +46,7 @@ function validateOverride(value, request, projects, timeZone) {
   if (value.contentAnalysis && !/\b(?:analy[sz]e|inspect|review|read)\b.{0,80}\b(?:transcript|conversation|session|chat)\b.{0,40}\b(?:content|text|messages?)\b|\b(?:deep|semantic)\s+content\s+analysis\b/i.test(request)) {
     throw new Error('content analysis requires an explicit opt-in in the user request');
   }
-  return { kind: value.kind, history: value.period ? 'period' : 'all-available',
+  return { kind: value.kind, history: value.history === 'since-installed' && value.kind === 'source-inventory' ? 'since-installed' : value.period ? 'period' : 'all-available',
     period: value.period ?? null, periodUnit: null, comparePeriod: value.comparePeriod ?? null,
     projects: selectedProjects, models: selectedModels, timeZone: value.timeZone ?? timeZone,
     contentAnalysis: value.contentAnalysis === true, surface: value.surface ?? 'default',
@@ -114,6 +115,7 @@ export function runReportRequest(request, {
   queryOverride = null,
   judgment = null,
   deliver = true,
+  codexRoot, rexRoot, shareViewRoot, command,
 } = {}) {
   const projects = discoverProjects(root);
   const queryResult = queryOverride ? { status: 'resolved', query: validateOverride(queryOverride, request, projects, timeZone) } :
@@ -124,7 +126,12 @@ export function runReportRequest(request, {
   if (query.currentSession && !process.env.CLAUDE_CODE_SESSION_ID) {
     return { status: 'clarification', question: 'Which session should I report? The host did not provide a current Claude session ID.' };
   }
-  const options = { root, from: query.period?.from, to: query.period?.to,
+  const sourceInventory = query.kind === 'source-inventory' ? collectSourceInventory({
+    claudeRoot: root, codexRoot, rexRoot, shareViewRoot, command,
+    from: query.history === 'since-installed' ? 'since-installed' : query.period?.from,
+    to: query.period?.to,
+  }) : null;
+  const options = { root, from: sourceInventory?.window.from ?? query.period?.from, to: query.period?.to,
     projects: query.projects, models: query.models,
     session: query.currentSession ? process.env.CLAUDE_CODE_SESSION_ID : undefined };
   let report = collectUsage(options);
@@ -160,7 +167,8 @@ export function runReportRequest(request, {
   const selectedFinding = query.kind === 'sessions'
     ? reportFindings.find((entry) => entry.id === query.findingId) : null;
   const view = buildReportView(report, { compareTo: baseline, assessment,
-    query, projectNames: projects, findings: reportFindings, finding: selectedFinding });
+    query, projectNames: projects, findings: reportFindings, finding: selectedFinding,
+    sourceInventory });
   const delivery = deliver ? deliverReport(view, { preference: query.surface === 'default' ? undefined : query.surface,
     terminalSupported, outputDir, openBrowser, writeTerminal }) : null;
   const context = { query: { ...query, findingIds: reportFindings.map((entry) => entry.id),

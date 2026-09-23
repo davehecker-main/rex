@@ -124,7 +124,7 @@ export function resolveReportQuery(request, {
 } = {}) {
   if (typeof request !== 'string' || !request.trim()) return clarification('What would you like Rex to report?');
   const text = request.trim();
-  const recognized = /\b(?:use|show|usage|tokens?|cost|spend|habits?|behavior|time sinks?|wasting time|interruptions?|recommend(?:ed|ations?)?|interventions?|changes rex|compare|versus|sessions?|evidence|browser|terminal|report|history|metrics|analy[sz]e|inspect|review)\b/i.test(text);
+  const recognized = /\b(?:use|show|usage|tokens?|cost|spend|habits?|behavior|time sinks?|wasting time|interruptions?|recommend(?:ed|ations?)?|interventions?|changes rex|compare|versus|sessions?|evidence|browser|terminal|report|history|metrics|sources?|inventory|analy[sz]e|inspect|review)\b/i.test(text);
   const followUp = /\b(?:only|that|this|it|same|open|show)\b/i.test(text);
   if (!recognized && !/\bhow much did i use\b/i.test(text) && !(previous && followUp)) return clarification('What would you like Rex to report? Please name the subject or the report to refine.');
   const todayParts = localParts(new Date(now), timeZone);
@@ -153,8 +153,9 @@ export function resolveReportQuery(request, {
     return clarification(previous?.findingIds?.length ? `Which finding ID should I show sessions for? ${previous.findingIds.join(', ')}` : 'Which finding should I show sessions for?');
   }
   const comparison = /\b(?:compare|versus|vs\.?|against)\b/i.test(text);
-  const hasNewKind = /\b(?:usage|tokens?|cost|habits?|behavior|time sinks?|wasting time|interruptions?|recommend(?:ed|ations?)?|interventions?|changes rex)\b/i.test(text);
-  const kind = drillDown ? 'sessions' : comparison ? 'comparison' :
+  const sourceRequest = /\b(?:sources?|source inventory|inventory)\b/i.test(text) && /\b(?:rex|report|usage|data|inventory|sources?)\b/i.test(text);
+  const hasNewKind = /\b(?:usage|tokens?|cost|habits?|behavior|time sinks?|wasting time|interruptions?|recommend(?:ed|ations?)?|interventions?|changes rex|sources?|inventory)\b/i.test(text);
+  const kind = drillDown ? 'sessions' : sourceRequest ? 'source-inventory' : comparison ? 'comparison' :
     /\b(?:recommend(?:ed|ations?)?|interventions?|changes rex)\b/i.test(text) ? 'intervention' :
     /\b(?:habits?|behavior|time sinks?|wasting time|interruptions?)\b/i.test(text) ? 'behavior' :
     previous && !hasNewKind ? previous.kind : 'usage';
@@ -162,8 +163,8 @@ export function resolveReportQuery(request, {
   const metricsOnly = /\bmetrics[- ]only\b/i.test(text);
   const query = {
     kind,
-    history: selected?.history ?? previous?.history ?? 'all-available',
-    period: selected ? selected.value : previous?.period ?? null,
+    history: sourceRequest && /\bsince installed\b/i.test(text) ? 'since-installed' : selected?.history ?? previous?.history ?? 'all-available',
+    period: sourceRequest && /\bsince installed\b/i.test(text) ? null : selected ? selected.value : previous?.period ?? null,
     periodUnit: selected?.unit ?? previous?.periodUnit ?? null,
     comparePeriod: null,
     projects: projectResult.value,

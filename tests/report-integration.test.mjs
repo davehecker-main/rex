@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -239,7 +239,14 @@ test('behavior report command invokes read-only Rex judgment before browser deli
     const command = join(process.cwd(), 'scripts', 'rex-report.sh');
     const completed = spawnSync('sh', [command, request, '--root', claudeRoot], { encoding: 'utf8', env });
     assert.equal(completed.status, 0, completed.stderr);
-    assert.match(readFileSync(join(root, 'judged'), 'utf8'), /--sandbox\nread-only/);
+    const judged = readFileSync(join(root, 'judged'), 'utf8');
+    assert.match(judged, /--sandbox\nread-only/);
+    assert.match(judged, /The user typed this, verbatim:\nReview all available history for habits/);
+    const agentStarted = spawnSync('sh', [command, request, '--root', claudeRoot], {
+      encoding: 'utf8', env: { ...env, REX_REPORT_CALLER: 'claude' },
+    });
+    assert.equal(agentStarted.status, 0, agentStarted.stderr);
+    assert.match(readFileSync(join(root, 'judged'), 'utf8'), /Claude is asking:\nReview all available history for habits/);
     const context = JSON.parse(readFileSync(join(root, 'state', 'rex', 'report-context.json'), 'utf8'));
     assert.equal(context.judgment.summary, 'Rex reviewed the measured sessions');
     assert.match(readFileSync(context.reportPath, 'utf8'), /Rex reviewed the measured sessions/);
@@ -268,5 +275,57 @@ test('prepared evidence excludes transcript text by default and only exposes a s
     evidence = readFileSync(evidencePath, 'utf8');
     assert.doesNotMatch(evidence, /SECRET_TRANSCRIPT_CONTENT/);
     assert.match(JSON.parse(evidence).contentSources, /projects$/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('source request follows the report path and keeps provider conventions and coverage visible', () => {
+  try {
+    fixture();
+    const codexRoot = join(root, 'codex');
+    const rexRoot = join(root, 'rex');
+    const installed = join(claudeRoot, 'commands', 'rex.md');
+    mkdirSync(join(codexRoot, 'sessions'), { recursive: true });
+    mkdirSync(join(rexRoot, 'scripts'), { recursive: true });
+    mkdirSync(join(claudeRoot, 'commands'), { recursive: true });
+    writeFileSync(installed, 'installed');
+    utimesSync(installed, new Date('2026-09-20T00:00:00Z'), new Date('2026-09-20T00:00:00Z'));
+    writeFileSync(join(codexRoot, 'sessions', 'one.jsonl'), JSON.stringify({
+      type: 'token_usage_record', timestamp: '2026-09-22T12:00:00Z',
+      payload: { session_id: 's1', response_id: 'r1', usage: { input_tokens: 7, output_tokens: 3, reasoning_output_tokens: 1 } },
+    }));
+    writeFileSync(join(claudeRoot, 'settings.json'), '{"permissions":{"allow":["SECRET_GRANT_VALUE"]}}');
+    const options = { root: claudeRoot, codexRoot, rexRoot, shareViewRoot: join(root, 'shareview'),
+      command: () => ({ status: 1, stdout: '' }), outputDir, now: '2026-09-23T18:00:00Z',
+      timeZone: 'America/Los_Angeles', openBrowser: () => {} };
+    const result = runReportRequest('Show Rex source inventory since installed', options);
+    assert.equal(result.status, 'delivered');
+    assert.equal(result.query.kind, 'source-inventory');
+    assert.equal(result.view.sourceInventory.window.requestedFrom, 'since-installed');
+    assert.equal(result.view.sourceInventory.installMilestones.chosen.source, 'installed Claude command mtime');
+    const html = readFileSync(result.delivery.path, 'utf8');
+    assert.match(html, /Source inventory/);
+    assert.match(html, /Data held/);
+    assert.match(html, /Event/);
+    assert.match(html, /Snapshot/);
+    assert.match(html, /Codex provider tokens/);
+    assert.match(html, /Claude provider tokens/);
+    assert.match(html, /Missing/);
+    assert.match(html, /Unavailable/);
+    assert.doesNotMatch(html, /SECRET_GRANT_VALUE/);
+    const bin = join(root, 'bin');
+    mkdirSync(bin);
+    const opener = join(bin, process.platform === 'darwin' ? 'open' : 'xdg-open');
+    writeFileSync(opener, '#!/bin/sh\nprintf "%s" "$1" > "$REX_OPEN_CAPTURE"\n');
+    chmodSync(opener, 0o700);
+    const cli = spawnSync(process.execPath, [join(process.cwd(), 'scripts', 'rex-report.mjs'),
+      '--root', claudeRoot, '--codex-root', codexRoot, '--rex-root', rexRoot,
+      '--shareview-root', join(root, 'shareview'), 'Show Rex source inventory since installed'], {
+      encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}`,
+        XDG_DATA_HOME: join(root, 'state'), REX_OPEN_CAPTURE: join(root, 'opened') },
+    });
+    assert.equal(cli.status, 0, cli.stderr);
+    const context = JSON.parse(readFileSync(join(root, 'state', 'rex', 'report-context.json'), 'utf8'));
+    assert.equal(context.query.kind, 'source-inventory');
+    assert.match(readFileSync(context.reportPath, 'utf8'), /Claude provider tokens/);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

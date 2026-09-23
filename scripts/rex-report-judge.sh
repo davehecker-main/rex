@@ -21,6 +21,18 @@ stderr_log=$(mktemp)
 trap 'rm -f "$prompt" "$stderr_log"' EXIT
 {
   printf '%s\n\n' "$persona"
+  python3 - "$evidence" "${REX_REPORT_CALLER:-user}" <<'PY'
+import json, sys
+with open(sys.argv[1], encoding='utf-8') as source:
+    request = json.load(source)['request']
+caller = sys.argv[2]
+if caller not in ('user', 'claude', 'codex'):
+    sys.exit('REX_REPORT_CALLER must be user, claude, or codex')
+header = {'user': 'The user typed this, verbatim:', 'claude': 'Claude is asking:', 'codex': 'Codex is asking:'}[caller]
+print(header)
+print(request)
+print()
+PY
   printf 'Read the structured Rex report evidence at %s. Judge only the requested scope.\n' "$evidence"
   printf 'The contentSources path may be read only when query.contentAnalysis is true.\n'
   printf 'If contentAnalysis is false, do not read raw transcripts. Treat metric patterns as observations, not established habits.\n'
