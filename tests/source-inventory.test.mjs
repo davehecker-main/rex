@@ -171,8 +171,21 @@ test('reports cache staleness, safe transcript facts and missing install candida
   assert.equal(source(report, 'claude.projects').facts.toolErrors, 1);
   assert.equal(source(report, 'claude.projects').facts.hookDurationMs, 17);
   assert.equal(source(report, 'claude.projects').facts.classifierDenials, 1);
+  assert.equal(source(report, 'claude.projects').facts.contextAttachments, 0);
+  assert.match(source(report, 'claude.projects').limit, /automatic refusals/i);
   assert.equal(source(report, 'claude.stats-cache').facts.stale, true);
   assert.ok(report.installMilestones.missingCandidates.some((row) =>
     row.source === 'installed Claude command mtime' && row.status === 'dangling'));
+  assert.equal(JSON.stringify(report).includes('DO_NOT_REPORT'), false);
+});
+
+test('counts context attachment records without reporting their contents', () => {
+  const options = fixture();
+  file(join(options.claudeRoot, 'projects', 'p', 'session.jsonl'), JSON.stringify({
+    type: 'attachment', timestamp: '2026-09-21T10:00:00Z', attachment: { secret: 'DO_NOT_REPORT' },
+  }) + '\n');
+  const report = collectSourceInventory(options);
+  assert.equal(source(report, 'claude.projects').facts.contextAttachments, 1);
+  assert.match(source(report, 'claude.projects').dataHeld, /attachments/);
   assert.equal(JSON.stringify(report).includes('DO_NOT_REPORT'), false);
 });

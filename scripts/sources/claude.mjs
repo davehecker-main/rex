@@ -10,13 +10,15 @@ export function claudeSources(root, from, to) {
     recordsSource({ id: `claude.${id}`, path: join(root, path), extensions, kind: 'snapshot', dataHeld, limit, from, to,
       facts: (_dated, all) => ({ documents: all.length }) });
   const projects = recordsSource({ id: 'claude.projects', path: join(root, 'projects'), extensions: ['.jsonl'],
-    kind: 'event', dataHeld: 'turns, tools, usage, errors, subagents', from, to,
+    kind: 'event', dataHeld: 'turns, tools, usage, errors, subagents, context attachments', from, to,
     timestamp: (row) => row.timestamp,
-    limit: 'Local transcript rows; deduplicated request accounting comes from the Claude accounting collector.',
+    limit: 'Local transcript rows; classifier denials are automatic refusals, not prompts answered. Deduplicated request accounting comes from the Claude accounting collector.',
     facts: (rows) => {
       const metrics = { questions: 0, agentLaunches: 0, toolErrors: 0, classifierDenials: 0,
+        contextAttachments: 0,
         hookRuns: 0, hookDurationMs: 0 };
       for (const row of rows) {
+        if (row.attachment && typeof row.attachment === 'object') metrics.contextAttachments++;
         if (row.type === 'system' && row.subtype === 'stop_hook_summary') {
           metrics.hookRuns += Number(row.hookCount) || 0;
           for (const hook of row.hookInfos ?? []) metrics.hookDurationMs += Number(hook.durationMs) || 0;
