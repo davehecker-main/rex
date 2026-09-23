@@ -120,6 +120,25 @@ interruption and a detour all produce elapsed time, and only two of them are a p
 Elapsed time alone does not measure human effort, and the digest says so in its own body so
 the distinction reaches Rex every time.
 
+## Usage accounting foundation
+
+```sh
+node scripts/usage-report.mjs --from 2026-09-01 --to 2026-10-01
+node scripts/usage-report.mjs --requests
+```
+
+The report scans local Claude Code transcripts across projects, resumed sessions, and
+subagents. Dates use UTC; `--to` is exclusive. It returns JSON totals and breakdowns by
+day, model, project, and session. `--requests` includes individual request records for
+future report queries. No prompt, tool argument, or assistant text enters the report.
+
+Token totals are deduplicated by API request ID. `apiEquivalentUsd` applies the dated
+first-party Claude API rate snapshot listed in the report; it is not a Claude subscription
+charge or an invoice. If pricing or source coverage is incomplete, that total is `null`
+and `knownApiEquivalentUsd` is only the priced lower bound. The `coverage` field states
+what was missing. This command is the accounting base for a later natural-language report;
+it does not yet answer questions or render an interactive report.
+
 ## The intervention log
 
 Rex cold-starts on every consult and remembers nothing. `interventions.jsonl` — at
