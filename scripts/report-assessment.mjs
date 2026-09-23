@@ -2,9 +2,11 @@ const measuredFields = ['requests', 'humanTurns', 'assistantTurns', 'toolCalls',
 const gapFields = ['unreadableFiles', 'malformedLines', 'rowsWithoutUsage', 'undatedRows'];
 
 function sessionIds(report, project) {
-  return [...new Set((report.requests ?? [])
+  const withRequests = (report.requests ?? [])
     .filter((request) => project === undefined || request.project === project)
-    .map((request) => request.session))].sort();
+    .map((request) => request.session);
+  const sessionRows = project === undefined ? (report.groups?.bySession ?? []).map((entry) => entry.key) : [];
+  return [...new Set([...withRequests, ...sessionRows])].sort();
 }
 
 function measurements(report, project) {
@@ -123,7 +125,7 @@ export function assessReport(report, {
   const health = !currentMetrics.sessions.length || hasGaps(report)
     ? { status: 'unknown', basis: 'Insufficient session or source coverage.' }
     : currentMetrics.metrics.interruptions === 0
-      ? { status: 'healthy', basis: 'No interruptions recorded in available metrics; semantic behavior was not assessed.' }
+      ? { status: 'healthy', basis: 'No recorded interruption signal in available metrics; other habits and semantic behavior were not assessed.' }
       : { status: 'inconclusive', basis: 'Recorded interruptions need context before judging behavior.' };
   return {
     comparisons,

@@ -103,6 +103,13 @@ test('does not invent a range for an unqualified request', () => {
   assert.equal(result.query.history, 'all-available');
 });
 
+test('Rex as advisor is not silently treated as the Rex project', () => {
+  const result = resolveReportQuery('Did the changes Rex recommended last month help?', context);
+  assert.equal(result.status, 'resolved');
+  assert.equal(result.query.kind, 'intervention');
+  assert.deepEqual(result.query.projects, []);
+});
+
 test('collector options retain explicit project filtering and exclusive periods', () => {
   const query = resolveReportQuery('Show ShareView last month', context).query;
   assert.deepEqual(collectorOptions(query, '/some/claude/root'), [{

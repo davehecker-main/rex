@@ -88,3 +88,13 @@ test('delivery creates a private browser artifact or writes a terminal report', 
     assert.match(written[0], /Supporting sessions/);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+test('browser launch failure still returns the saved report URL', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rex-view-test-'));
+  try {
+    const result = deliverReport(buildReportView(sample()), { outputDir: root,
+      openBrowser: () => { throw new Error('opener unavailable'); } });
+    assert.match(result.notice, /opener unavailable/);
+    assert.match(readFileSync(result.path, 'utf8'), /Supporting sessions/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

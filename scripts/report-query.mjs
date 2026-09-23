@@ -74,8 +74,11 @@ function previousPeriod(query, timeZone) {
 
 function detectProjects(text, projects, previous) {
   if (/\b(?:every|all) projects\b/i.test(text)) return { value: [] };
-  const matches = projects.filter(({ name, key }) =>
-    [name, key].some((label) => new RegExp(`(^|[^\\w])${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^\\w]|$)`, 'i').test(text)));
+  const matches = projects.filter(({ name, key }) => {
+    if (/^rex$/i.test(name) && /\bRex\s+recommended\b/i.test(text) &&
+      !/\b(?:only|for|in|from)\s+Rex\b/i.test(text)) return false;
+    return [name, key].some((label) => new RegExp(`(^|[^\\w])${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^\\w]|$)`, 'i').test(text));
+  });
   if (matches.length) return { value: matches.map(({ key }) => key) };
   const named = text.match(/\b(?:only|for|in)\s+([A-Z][\w-]+)\b/);
   if (named && !/^(?:all|every|last|this|usage|tokens|cost|the|my|browser)$/i.test(named[1])) {
@@ -103,6 +106,9 @@ export function resolveReportQuery(request, {
 } = {}) {
   if (typeof request !== 'string' || !request.trim()) return clarification('What would you like Rex to report?');
   const text = request.trim();
+  const recognized = /\b(?:use|show|usage|tokens?|cost|spend|habits?|behavior|time sinks?|wasting time|interruptions?|recommend(?:ed|ations?)?|interventions?|changes rex|compare|versus|sessions?|evidence|browser|terminal|report|history|metrics|analy[sz]e|inspect|review)\b/i.test(text);
+  const followUp = /\b(?:only|that|this|it|same|open|show)\b/i.test(text);
+  if (!recognized && !/\bhow much did i use\b/i.test(text) && !(previous && followUp)) return clarification('What would you like Rex to report? Please name the subject or the report to refine.');
   const todayParts = localParts(new Date(now), timeZone);
   const today = `${todayParts.year}-${String(todayParts.month).padStart(2, '0')}-${String(todayParts.day).padStart(2, '0')}`;
   const projectResult = detectProjects(text, projects, previous);
@@ -140,6 +146,8 @@ export function resolveReportQuery(request, {
     contentAnalysis: metricsOnly ? false : explicitOptIn || previous?.contentAnalysis === true,
     surface: /\b(?:browser|web page)\b/i.test(text) ? 'browser' : /\b(?:terminal|tui)\b/i.test(text) ? 'terminal' : previous?.surface ?? 'default',
     findingId: drillDown ? previous.findingId : previous?.findingId ?? null,
+    currentSession: /\b(?:current|this) session\b/i.test(text) ||
+      (previous?.currentSession === true && !/\b(?:(?:all|every) sessions|all available history|all history)\b/i.test(text)),
   };
   if (weekPair) {
     query.comparePeriod = calendarPeriod('last week', today, timeZone).value;

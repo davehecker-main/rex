@@ -12,6 +12,10 @@
 set -euo pipefail
 
 repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+if [ "${1:-}" = report ]; then
+  shift
+  exec node "$repo_dir/scripts/rex-report.mjs" "$@"
+fi
 digest=${1:?usage: rex-consult.sh <digest.md> [question]}
 question=${2:-"Read the digest and tell me what you see."}
 interventions=${REX_LOG:-"${XDG_DATA_HOME:-$HOME/.local/share}/rex/interventions.jsonl"}

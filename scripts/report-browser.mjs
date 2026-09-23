@@ -32,6 +32,9 @@ export function deliverReport(view, {
   const path = join(directory, 'report.html');
   writeFileSync(path, renderReportHtml(view), { mode: 0o600 });
   const url = pathToFileURL(path).href;
-  openBrowser(url);
+  try { openBrowser(url); }
+  catch (error) {
+    return { ...selection, path, url, notice: `Browser launch failed: ${error.message}. Open the saved report URL.` };
+  }
   return { ...selection, path, url };
 }

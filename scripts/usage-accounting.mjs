@@ -61,15 +61,22 @@ export function priceUsage(model, usage, context = {}) {
 
 function transcriptFiles(root) {
   const files = [];
+  let unreadableDirs = 0;
   const walk = (dir) => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    let entries;
+    try { entries = readdirSync(dir, { withFileTypes: true }); }
+    catch (error) {
+      if (error.code === 'EACCES' || error.code === 'EPERM') { unreadableDirs++; return; }
+      throw error;
+    }
+    for (const entry of entries) {
       const path = join(dir, entry.name);
       if (entry.isDirectory()) walk(path);
       else if (entry.isFile() && entry.name.endsWith('.jsonl')) files.push(path);
     }
   };
   walk(join(root, 'projects'));
-  return files.sort();
+  return { files: files.sort(), unreadableDirs };
 }
 
 const time = (value) => {
@@ -91,26 +98,27 @@ function group(requests, key) {
   return [...map.values()].sort((a, b) => String(a.key).localeCompare(String(b.key)));
 }
 
-export function collectUsage({ root = join(homedir(), '.claude'), from, to, project } = {}) {
+export function collectUsage({ root = join(homedir(), '.claude'), from, to, project, projects, models, session } = {}) {
   const start = from ? time(from) : null;
   const end = to ? time(to) : null;
   if (from && start === null) throw new Error(`invalid from date: ${from}`);
   if (to && end === null) throw new Error(`invalid to date: ${to}`);
   if (start !== null && end !== null && start >= end) throw new Error('from must precede to');
-  const coverage = { files: 0, unreadableFiles: 0, malformedLines: 0, assistantRows: 0, rowsWithoutUsage: 0, undatedRows: 0, duplicateRows: 0, unpricedRequests: 0, unpricedByReason: {} };
+  const coverage = { files: 0, missingSource: 0, unreadableDirs: 0, unreadableFiles: 0, malformedLines: 0, assistantRows: 0, rowsWithoutUsage: 0, undatedRows: 0, duplicateRows: 0, unpricedRequests: 0, unpricedByReason: {} };
   const byId = new Map();
   const eventSeen = new Set();
   const eventRows = [];
-  let files;
-  try { files = transcriptFiles(root); }
+  let discovered;
+  try { discovered = transcriptFiles(root); }
   catch (error) {
-    if (error.code === 'ENOENT') files = [];
+    if (error.code === 'ENOENT') { discovered = { files: [], unreadableDirs: 0 }; coverage.missingSource = 1; }
     else throw error;
   }
-  for (const path of files) {
+  coverage.unreadableDirs = discovered.unreadableDirs;
+  for (const path of discovered.files) {
     const rel = relative(join(root, 'projects'), path).split(sep);
     const projectName = rel[0];
-    if (project && projectName !== project) continue;
+    if ((project && projectName !== project) || (projects?.length && !projects.includes(projectName))) continue;
     coverage.files++;
     let lines;
     try { lines = readFileSync(path, 'utf8').split('\n'); }
@@ -120,6 +128,7 @@ export function collectUsage({ root = join(homedir(), '.claude'), from, to, proj
       let row;
       try { row = JSON.parse(lines[i]); }
       catch { coverage.malformedLines++; continue; }
+      if (session && (row.sessionId ?? rel[1]?.replace(/\.jsonl$/, '')) !== session) continue;
       const at = time(row.timestamp);
       if (at === null) { if (row.type === 'assistant' || row.type === 'user') coverage.undatedRows++; continue; }
       if ((start !== null && at < start) || (end !== null && at >= end)) continue;
@@ -132,6 +141,7 @@ export function collectUsage({ root = join(homedir(), '.claude'), from, to, proj
         }
       }
       if (row.type !== 'assistant') continue;
+      if (models?.length && !models.includes(row.message?.model)) continue;
       coverage.assistantRows++;
       if (!row.message?.usage) { coverage.rowsWithoutUsage++; continue; }
       const id = row.requestId ?? row.message.id ?? (row.uuid ? `${row.sessionId ?? basename(path)}:${row.uuid}` : `${path}:${i}`);
@@ -199,13 +209,20 @@ export function collectUsage({ root = join(homedir(), '.claude'), from, to, proj
     for (const key of Object.keys(behavior)) behavior[key] += metrics[key];
   }
   const bySession = group(requests, 'session');
-  for (const entry of bySession) Object.assign(entry, sessionBehavior.get(entry.key));
+  for (const [session, metrics] of sessionBehavior) {
+    const entry = bySession.find((row) => row.key === session);
+    if (entry) Object.assign(entry, metrics);
+    else if (!models?.length) bySession.push({ key: session, requests: 0, tokens: emptyTokens(),
+      knownApiEquivalentUsd: 0, unpricedRequests: 0, ...metrics });
+  }
+  bySession.sort((a, b) => a.key.localeCompare(b.key));
   const incomplete = coverage.unpricedRequests || coverage.rowsWithoutUsage || coverage.malformedLines ||
-    coverage.unreadableFiles || coverage.undatedRows;
+    coverage.unreadableFiles || coverage.unreadableDirs || coverage.missingSource || coverage.undatedRows;
   return {
     basis: { source: 'Claude Code local transcripts', priceAsOf: RATE_CARD.asOf, priceSource: RATE_CARD.source,
       costMeaning: 'first-party API-equivalent estimate at snapshot rates, not a Claude subscription charge',
-      from: from ?? null, toExclusive: to ?? null },
+      from: from ?? null, toExclusive: to ?? null,
+      behaviorMeaning: models?.length ? 'Turn and tool metrics span all models in included sessions; model-specific behavior is unavailable.' : null },
     summary: { requests: requests.length, subagentRequests: requests.filter((r) => r.subagent).length,
       ...behavior, tokens, knownApiEquivalentUsd, apiEquivalentUsd: incomplete ? null : knownApiEquivalentUsd },
     coverage,

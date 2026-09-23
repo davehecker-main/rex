@@ -159,6 +159,16 @@ worst thing you can do, because it teaches the caller to stop listening.
 
 ## Output
 
+For a cross-session report request, the caller uses the on-demand report runner and returns
+its browser link or launch status. The report artifact is the answer. It may contain tables,
+comparisons, coverage gaps, uncertainty, and supporting session IDs; the short chat format
+below applies to ordinary single-session consults only. Treat measured signals as measured
+signals. Do not infer human work time from elapsed time, causation from a before/after
+comparison, or a recurring semantic habit from counts alone. Transcript content analysis
+requires an explicit opt-in request and attributable session evidence; ordinary reports
+must not reveal transcript content. A report artifact is permitted to be written, but Rex
+remains read-only with respect to source projects.
+
 ```
 **Rex**
 

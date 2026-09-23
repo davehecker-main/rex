@@ -12,7 +12,7 @@ const metric = (row) => ({
   interruptions: row.interruptions ?? null,
 });
 
-export function buildReportView(report, { compareTo } = {}) {
+export function buildReportView(report, { compareTo, assessment, query, projectNames = [], findings = [], finding = null } = {}) {
   if (!report?.basis || !report?.summary || !report?.coverage || !report?.groups) {
     throw new TypeError('report requires basis, summary, coverage, and groups');
   }
@@ -22,6 +22,7 @@ export function buildReportView(report, { compareTo } = {}) {
     ['project', 'By project', groups.byProject], ['session', 'Supporting sessions', groups.bySession],
   ].map(([id, title, rows]) => ({ id, title, rows: (rows ?? []).map(metric) }));
   const gaps = [
+    ['Missing source directory', coverage.missingSource], ['Unreadable directories', coverage.unreadableDirs],
     ['Unreadable files', coverage.unreadableFiles], ['Malformed lines', coverage.malformedLines],
     ['Rows without usage', coverage.rowsWithoutUsage], ['Undated rows', coverage.undatedRows],
     ['Unpriced requests', coverage.unpricedRequests],
@@ -30,7 +31,12 @@ export function buildReportView(report, { compareTo } = {}) {
   const view = {
     title: 'Rex usage report',
     scope: { source: basis.source, from: basis.from, toExclusive: basis.toExclusive,
-      timezone: 'UTC', sessions: sections[3].rows.length, files: coverage.files ?? 0 },
+      timezone: 'UTC', calendarTimeZone: query?.timeZone ?? 'UTC',
+      sessions: sections[3].rows.length, files: coverage.files ?? 0,
+      projects: query?.projects?.map((key) => projectNames.find((item) => item.key === key)?.name ?? key) ?? [],
+      models: query?.models ?? [], history: query?.history ?? 'all-available',
+      interventionPeriod: query?.kind === 'intervention' ? query.period : null,
+      behaviorMeaning: basis.behaviorMeaning ?? null },
     summary: { requests: summary.requests ?? 0, tokens: tokenTotal(summary.tokens),
       humanTurns: summary.humanTurns ?? 0, assistantTurns: summary.assistantTurns ?? 0,
       toolCalls: summary.toolCalls ?? 0, interruptions: summary.interruptions ?? 0,
@@ -44,6 +50,9 @@ export function buildReportView(report, { compareTo } = {}) {
       assistantRows: coverage.assistantRows ?? 0 },
     sections,
     comparison: null,
+    assessment: assessment ?? null,
+    findings,
+    finding,
   };
   if (compareTo) {
     view.comparison = {
@@ -57,22 +66,34 @@ export function buildReportView(report, { compareTo } = {}) {
   return view;
 }
 
-const scopeText = (scope) => `${scope.from ?? 'first available'} to ${scope.toExclusive ?? 'latest available'} (exclusive), ${scope.timezone}`;
+const scopeText = (scope) => `${scope.from ?? 'first available'} to ${scope.toExclusive ?? 'latest available'} (exclusive), ${scope.timezone}; calendar selection ${scope.calendarTimeZone}, daily groups UTC`;
 const costText = (cost) => cost.status === 'complete'
   ? money(cost.apiEquivalentUsd) : `unknown total; ${money(cost.knownApiEquivalentUsd)} from priced requests`;
-const columns = ['Key', 'Requests', 'Tokens', 'Known API equivalent', 'Unpriced'];
+const columns = ['Key', 'Metered requests', 'Tokens', 'Known API equivalent', 'Unpriced'];
 const cells = (row) => [row.key, number(row.requests), number(row.tokens), money(row.knownApiEquivalentUsd), number(row.unpricedRequests)];
 
 export function renderReportTerminal(view) {
   const lines = [view.title, '='.repeat(view.title.length),
     `Scope: ${scopeText(view.scope)}`, `Source: ${view.scope.source}; ${number(view.scope.files)} files; ${number(view.scope.sessions)} sessions`,
-    `Requests: ${number(view.summary.requests)} (${number(view.summary.subagentRequests)} subagent); tokens: ${number(view.summary.tokens)}`,
+    `Metered requests: ${number(view.summary.requests)} (${number(view.summary.subagentRequests)} subagent); tokens: ${number(view.summary.tokens)}`,
     `Human turns: ${number(view.summary.humanTurns)}; assistant turns: ${number(view.summary.assistantTurns)}; tool calls: ${number(view.summary.toolCalls)}; interruptions: ${number(view.summary.interruptions)}`,
     `Estimated API equivalent: ${costText(view.cost)}`, `Actual spending: unavailable`,
     `Assumption: ${view.cost.meaning}; rate snapshot ${view.cost.priceAsOf} (${view.cost.priceSource})`,
     `Coverage: ${view.coverage.gaps.length ? view.coverage.gaps.map((gap) => `${gap.label} ${number(gap.value)}`).join('; ') : 'no recorded gaps'}; duplicate rows ${number(view.coverage.duplicateRows)}`,
   ];
+  lines.push(`Projects: ${view.scope.projects?.length ? view.scope.projects.join(', ') : 'all available'}; models: ${view.scope.models?.length ? view.scope.models.join(', ') : 'all available'}`);
+  if (view.scope.interventionPeriod) lines.push(`Interventions selected: ${view.scope.interventionPeriod.from} to ${view.scope.interventionPeriod.to} (exclusive)`);
+  if (view.scope.behaviorMeaning) lines.push(`Behavior scope: ${view.scope.behaviorMeaning}`);
   if (view.comparison) lines.push(`Comparison: ${view.comparison.label}; requests ${view.comparison.requestsDelta >= 0 ? '+' : ''}${number(view.comparison.requestsDelta)}; tokens ${view.comparison.tokensDelta >= 0 ? '+' : ''}${number(view.comparison.tokensDelta)}; estimated cost delta ${view.comparison.apiEquivalentUsdDelta === null ? 'unknown' : money(view.comparison.apiEquivalentUsdDelta)}`);
+  if (view.assessment) {
+    lines.push('', 'Assessment', `Health: ${view.assessment.health.status} — ${view.assessment.health.basis}`,
+      `Time sinks: ${view.assessment.timeSinks.status} — ${view.assessment.timeSinks.reason}`,
+      `Content analysis: ${view.assessment.contentAnalysis.status}${view.assessment.contentAnalysis.status === 'insufficient-evidence' ? ' (explicit opt-in; no supported semantic evidence supplied)' : ''}`);
+    for (const item of view.findings) lines.push(`Finding ${item.id}: ${item.label}; sessions ${item.sessions.join(', ')}; ${item.caveat}`);
+    for (const item of view.assessment.semanticFindings) lines.push(`Content finding: ${item.label}; evidence ${item.evidence.map((entry) => `${entry.session}:${entry.reference}`).join(', ')}; ${item.caveat ?? ''}`);
+    for (const item of view.assessment.interventions) lines.push(`Intervention: ${item.finding}; follow-through ${item.followThrough}; later evidence ${item.laterEvidence.status}`);
+    if (view.finding) lines.push(`Supporting sessions for ${view.finding.id}: ${view.finding.sessions.join(', ')}`);
+  }
   for (const section of view.sections) {
     lines.push('', section.title, columns.join(' | '));
     for (const row of section.rows) lines.push(cells(row).join(' | '));
@@ -99,13 +120,14 @@ export function renderReportHtml(view) {
     ? view.coverage.gaps.map((gap) => `<li>${escapeHtml(gap.label)}: ${number(gap.value)}</li>`).join('')
     : '<li>No recorded gaps</li>';
   const comparison = view.comparison ? `<section><h2>Comparison</h2><p>Baseline: ${escapeHtml(view.comparison.label)}. Requests: ${number(view.comparison.requestsDelta)}; tokens: ${number(view.comparison.tokensDelta)}; estimated cost difference: ${view.comparison.apiEquivalentUsdDelta === null ? 'unknown' : money(view.comparison.apiEquivalentUsdDelta)}.</p></section>` : '';
+  const assessment = view.assessment ? `<section><h2>Assessment</h2><p>Health: ${escapeHtml(view.assessment.health.status)} — ${escapeHtml(view.assessment.health.basis)}</p><p>Time sinks: ${escapeHtml(view.assessment.timeSinks.status)} — ${escapeHtml(view.assessment.timeSinks.reason)}</p><p>Content analysis: ${escapeHtml(view.assessment.contentAnalysis.status)}${view.assessment.contentAnalysis.status === 'insufficient-evidence' ? ' (explicit opt-in; no supported semantic evidence supplied)' : ''}</p><h3>Findings and evidence</h3><ul>${view.findings.map((item) => `<li>${escapeHtml(item.label)} (${escapeHtml(item.status)}): sessions ${escapeHtml(item.sessions.join(', '))}. ${escapeHtml(item.caveat)}</li>`).join('') || '<li>No supported metric finding</li>'}</ul><h3>Content findings</h3><ul>${view.assessment.semanticFindings.map((item) => `<li>${escapeHtml(item.label)}: ${escapeHtml(item.evidence.map((entry) => `${entry.session}:${entry.reference}`).join(', '))}. ${escapeHtml(item.caveat ?? '')}</li>`).join('') || '<li>None with attributable evidence</li>'}</ul><h3>Interventions</h3><ul>${view.assessment.interventions.map((item) => `<li>${escapeHtml(item.finding)}: follow-through ${escapeHtml(item.followThrough)}; later evidence ${escapeHtml(item.laterEvidence.status)}</li>`).join('') || '<li>None in the available intervention log</li>'}</ul>${view.finding ? `<h3>Supporting sessions for ${escapeHtml(view.finding.id)}</h3><p>${escapeHtml(view.finding.sessions.join(', '))}</p>` : ''}</section>` : '';
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(view.title)}</title><style>
     :root{color-scheme:light dark;font:16px system-ui,sans-serif}body{max-width:1100px;margin:auto;padding:2rem;line-height:1.5}h1{margin-bottom:.2rem}.sub{color:gray;margin-top:0}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:1rem}.card,section{border:1px solid #9996;border-radius:.6rem;padding:1rem;margin:1rem 0}.card strong{display:block;font-size:1.5rem}.scroll{overflow:auto}table{border-collapse:collapse;width:100%}th,td{text-align:left;padding:.45rem;border-bottom:1px solid #9996}th{white-space:nowrap}td:first-child{overflow-wrap:anywhere}label{display:block;margin:1rem 0}input{font:inherit;padding:.5rem;width:min(100%,25rem)}details{margin-top:1rem}.chart{margin:1rem 0}.bar-row{display:grid;grid-template-columns:7rem 1fr 3rem;gap:.5rem;align-items:center}.bar-row meter{width:100%}
   </style></head><body><main><h1>${escapeHtml(view.title)}</h1><p class="sub">${escapeHtml(scopeText(view.scope))}</p>
-  <p>${escapeHtml(view.scope.source)} · ${number(view.scope.files)} files · ${number(view.scope.sessions)} supporting sessions</p>
-  <div class="cards"><div class="card">Requests<strong>${number(view.summary.requests)}</strong></div><div class="card">Tokens<strong>${number(view.summary.tokens)}</strong></div><div class="card">Tool calls<strong>${number(view.summary.toolCalls)}</strong></div><div class="card">API equivalent<strong>${escapeHtml(costText(view.cost))}</strong></div></div>
+  <p>${escapeHtml(view.scope.source)} · ${number(view.scope.files)} files · ${number(view.scope.sessions)} supporting sessions</p><p>Projects: ${escapeHtml(view.scope.projects?.length ? view.scope.projects.join(', ') : 'all available')}; models: ${escapeHtml(view.scope.models?.length ? view.scope.models.join(', ') : 'all available')}</p>${view.scope.interventionPeriod ? `<p>Interventions selected: ${escapeHtml(view.scope.interventionPeriod.from)} to ${escapeHtml(view.scope.interventionPeriod.to)} (exclusive).</p>` : ''}${view.scope.behaviorMeaning ? `<p>${escapeHtml(view.scope.behaviorMeaning)}</p>` : ''}
+  <div class="cards"><div class="card">Metered requests<strong>${number(view.summary.requests)}</strong></div><div class="card">Tokens<strong>${number(view.summary.tokens)}</strong></div><div class="card">Tool calls<strong>${number(view.summary.toolCalls)}</strong></div><div class="card">API equivalent<strong>${escapeHtml(costText(view.cost))}</strong></div></div>
   <section><h2>Scope and assumptions</h2><p>Human turns: ${number(view.summary.humanTurns)}; assistant turns: ${number(view.summary.assistantTurns)}; interruptions: ${number(view.summary.interruptions)}; subagent requests: ${number(view.summary.subagentRequests)}.</p><p>${escapeHtml(view.cost.meaning)}. Rates as of ${escapeHtml(view.cost.priceAsOf)}: <a href="${escapeHtml(view.cost.priceSource)}">pricing source</a>. Actual spending is unavailable.</p><details><summary>Coverage details</summary><ul>${gaps}</ul><p>Duplicate rows: ${number(view.coverage.duplicateRows)}.</p></details></section>
-  ${comparison}<label>Filter rows <input type="search" id="filter" aria-label="Filter report rows"></label>
+  ${comparison}${assessment}<label>Filter rows <input type="search" id="filter" aria-label="Filter report rows"></label>
   ${view.sections.map(table).join('')}
   <script>document.getElementById('filter').addEventListener('input',e=>{const q=e.target.value.toLowerCase();for(const row of document.querySelectorAll('tr[data-search]'))row.hidden=!row.dataset.search.includes(q)});</script>
   </main></body></html>`;
