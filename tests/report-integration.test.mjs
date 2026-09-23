@@ -329,3 +329,40 @@ test('source request follows the report path and keeps provider conventions and 
     assert.match(readFileSync(context.reportPath, 'utf8'), /Claude provider tokens/);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+test('prepared source evidence gives Rex the discovered source list and the report command consults him', () => {
+  try {
+    fixture();
+    const installed = join(claudeRoot, 'commands', 'rex.md');
+    mkdirSync(join(claudeRoot, 'commands'), { recursive: true });
+    writeFileSync(installed, 'installed');
+    const bin = join(root, 'bin');
+    mkdirSync(bin);
+    const codex = join(bin, 'codex');
+    writeFileSync(codex, '#!/bin/sh\nprintf "%s\\n" "$@" > "$REX_JUDGE_CAPTURE"\nwhile [ "$#" -gt 0 ]; do if [ "$1" = "-o" ]; then shift; answer=$1; fi; shift; done\nprintf \'{"summary":"Rex interpreted source coverage","findings":[]}\' > "$answer"\n');
+    chmodSync(codex, 0o700);
+    const opener = join(bin, process.platform === 'darwin' ? 'open' : 'xdg-open');
+    writeFileSync(opener, '#!/bin/sh\nexit 0\n');
+    chmodSync(opener, 0o700);
+    const request = join(root, 'request.txt');
+    writeFileSync(request, 'Show Rex source inventory since installed');
+    const evidencePath = join(root, 'evidence.json');
+    const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`,
+      XDG_DATA_HOME: join(root, 'state'), REX_JUDGE_CAPTURE: join(root, 'judged') };
+    const prepare = spawnSync(process.execPath, [join(process.cwd(), 'scripts', 'rex-report.mjs'),
+      '--root', claudeRoot, '--codex-root', join(root, 'codex'), '--rex-root', join(root, 'rex'),
+      '--shareview-root', join(root, 'shareview'), '--prepare', evidencePath, '--request-file', request],
+    { encoding: 'utf8', env });
+    assert.equal(prepare.status, 0, prepare.stderr);
+    const evidence = JSON.parse(readFileSync(evidencePath, 'utf8'));
+    assert.ok(evidence.sourceInventory.sources.some((row) => row.id === 'claude.projects'));
+    assert.ok(evidence.sourceInventory.sources.some((row) => row.id === 'codex.sessions'));
+    const command = spawnSync('sh', [join(process.cwd(), 'scripts', 'rex-report.sh'), request,
+      '--root', claudeRoot, '--codex-root', join(root, 'codex'), '--rex-root', join(root, 'rex'),
+      '--shareview-root', join(root, 'shareview')], { encoding: 'utf8', env });
+    assert.equal(command.status, 0, command.stderr);
+    assert.match(readFileSync(join(root, 'judged'), 'utf8'), /The user typed this, verbatim:/);
+    const context = JSON.parse(readFileSync(join(root, 'state', 'rex', 'report-context.json'), 'utf8'));
+    assert.equal(context.judgment.summary, 'Rex interpreted source coverage');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
