@@ -97,7 +97,8 @@ the digest.
 completion. After `codex exec` returns, emit one response whose body begins with his returned
 text, unaltered, header line and all.
 
-- **Paste the block unaltered.** A paraphrase is a failed consult.
+- **Paste the block unaltered, including a question for Dave.** A paraphrase is a failed
+  consult. Do not answer the question on Dave's behalf.
 - **After his block: nothing**, except a factual correction in at most two sentences.
 - **The answer prints twice**; the block after `tokens used` is the final one.
 - **A healthy verdict is a real result.** When Rex says there is nothing to treat, relay that
@@ -112,12 +113,27 @@ this conversation next time:
 node scripts/log-intervention.mjs \
   --session <session-id> \
   --finding "<his diagnosis, one line>" \
-  --advice "<the correction he recommended>" \
+  --habit "<his slug>" \
+  --advice "<his correction or exact question>" \
   --acted <yes|no|partial>
 ```
 
-Log the healthy verdicts too, with `--finding none`. A log holding only the sessions that went
-badly cannot tell anyone whether Rex is right about the ones that went well.
+Omit `--habit` when Rex names none. Log healthy verdicts with `--finding none` and no
+habit. A finding the caller declines is likewise logged as `none`, so it cannot become a
+sighting. For a question, keep
+Rex's exact wording in `--advice`; that row lets him repeat it verbatim if unanswered.
+
+When Dave answers yes or no, the calling session appends a separate decision row:
+
+```sh
+node scripts/log-intervention.mjs --habit <slug> --decision rule \
+  --rule "<the one-line rule or where it lives>"
+# Or, for no:
+node scripts/log-intervention.mjs --habit <slug> --decision drop
+```
+
+The calling session carries a `rule` answer into the project's own process. Dave writes any
+permission grant himself. Record no inferred answer, and do not let Rex modify the project.
 
 Rex is advisory. He does not edit files, file issues, change project state, or carry work
 forward. If he recommends something worth doing, that goes through this project's own process
