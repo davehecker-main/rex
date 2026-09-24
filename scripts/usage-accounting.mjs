@@ -143,7 +143,7 @@ export function collectUsage({ root = join(homedir(), '.claude'), from, to, proj
       if (row.type === 'assistant' || row.type === 'user') {
         const eventId = row.uuid ? `${row.sessionId ?? projectName}:${row.uuid}` : `${path}:${i}`;
         if (!eventSeen.has(eventId)) {
-          eventRows.push({ row, session: row.sessionId ?? rel[1]?.replace(/\.jsonl$/, '') ?? 'unknown', project: projectName,
+          eventRows.push({ row, session: rowSession ?? 'unknown', project: projectName,
             date: new Date(at).toISOString().slice(0, 10) });
           eventSeen.add(eventId);
         }
@@ -154,7 +154,7 @@ export function collectUsage({ root = join(homedir(), '.claude'), from, to, proj
       coverage.assistantRows++;
       if (!row.message?.usage) { coverage.rowsWithoutUsage++; continue; }
       const id = row.requestId ?? row.message.id ?? (row.uuid ? `${row.sessionId ?? basename(path)}:${row.uuid}` : `${path}:${i}`);
-      const candidate = { id, session: row.sessionId ?? rel[1]?.replace(/\.jsonl$/, '') ?? 'unknown', project: projectName,
+      const candidate = { id, session: rowSession ?? 'unknown', project: projectName,
         date: new Date(at).toISOString().slice(0, 10), at, model: model ?? 'unknown',
         subagent: rel.includes('subagents') || row.isSidechain === true,
         usage: row.message.usage, score: (row.message.usage.output_tokens ?? 0) };
