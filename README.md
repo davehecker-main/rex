@@ -43,7 +43,8 @@ That installs the Codex agent into `~/.codex/agents/` and the Claude slash comma
 CODEX_HOME=/path/to/.codex CLAUDE_HOME=/path/to/.claude ./scripts/install.sh
 ```
 
-The scripts stay in this repo and run from here. They need Node 18+ and no dependencies.
+The scripts stay in this repo and run from here. They need Node 22.5+ (for `node:sqlite`)
+and no dependencies.
 
 ## Files
 

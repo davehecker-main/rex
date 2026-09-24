@@ -115,7 +115,7 @@ export function runReportRequest(request, {
   queryOverride = null,
   judgment = null,
   deliver = true,
-  codexRoot, rexRoot, shareViewRoot, command,
+  codexRoot, rexRoot, shareViewRoot, stateRoot, command,
 } = {}) {
   const projects = discoverProjects(root);
   const queryResult = queryOverride ? { status: 'resolved', query: validateOverride(queryOverride, request, projects, timeZone) } :
@@ -127,7 +127,7 @@ export function runReportRequest(request, {
     return { status: 'clarification', question: 'Which session should I report? The host did not provide a current Claude session ID.' };
   }
   const sourceInventory = query.kind === 'source-inventory' ? collectSourceInventory({
-    claudeRoot: root, codexRoot, rexRoot, shareViewRoot, command,
+    claudeRoot: root, codexRoot, rexRoot, shareViewRoot, stateRoot, command,
     from: query.history === 'since-installed' ? 'since-installed' : query.period?.from,
     to: query.period?.to,
   }) : null;

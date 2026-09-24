@@ -295,6 +295,7 @@ test('source request follows the report path and keeps provider conventions and 
     }));
     writeFileSync(join(claudeRoot, 'settings.json'), '{"permissions":{"allow":["SECRET_GRANT_VALUE"]}}');
     const options = { root: claudeRoot, codexRoot, rexRoot, shareViewRoot: join(root, 'shareview'),
+      stateRoot: join(root, 'inventory-state'),
       command: () => ({ status: 1, stdout: '' }), outputDir, now: '2026-09-23T18:00:00Z',
       timeZone: 'America/Los_Angeles', openBrowser: () => {} };
     const result = runReportRequest('Show Rex source inventory since installed', options);

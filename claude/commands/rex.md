@@ -25,8 +25,8 @@ Do not interpolate the request into shell code. The runner remembers the last re
 in a private context file, so follow-ups such as “only ShareView,” “compare that with the
 previous month,” and “show the sessions behind that finding” retain scope.
 
-The command prepares private structured evidence. For behavior, comparison, and intervention
-requests, it asks Rex through read-only `codex exec` to judge that evidence and validates
+The command prepares private structured evidence. For behavior, comparison, intervention, and
+source-inventory requests, it asks Rex through read-only `codex exec` to judge that evidence and validates
 his session references before adding the judgment to the report. If the host cannot launch
 Codex, it delivers the measured report and clearly says judgment was unavailable. The
 prepared evidence never includes raw transcript text; an explicit content-analysis request
@@ -42,7 +42,7 @@ The built-in resolver handles common time and follow-up language. For other clea
 you may resolve the user's words into a structured query JSON file and pass
 `--query-file <path>` alongside `--request-file` when invoking the underlying Node runner.
 The fields are `kind` (`usage`,
-`behavior`, `comparison`, `intervention`, `sessions`), `period` and `comparePeriod` as
+`behavior`, `comparison`, `intervention`, `sessions`, `source-inventory`), `period` and `comparePeriod` as
 inclusive ISO `from` and exclusive ISO `to`, `projects` as available encoded directory
 keys, `models` as exact model IDs, `surface` (`browser` or `terminal`), and optional
 `currentSession`, `findingId`, `contentAnalysis`, and `timeZone`. Omit filters the user did

@@ -35,8 +35,19 @@ install_command() {
 
 install_command "$claude_home/commands/rex.md"
 
+# Record the first-install time once, in Rex's existing state dir, and never touch it again.
+# The source-inventory report prefers this over any file mtime, because a reinstall rewrites
+# every installed file's mtime but must not move "since installed".
+state_dir=${XDG_DATA_HOME:-"$HOME/.local/share"}/rex
+milestone="$state_dir/installed-at"
+if [ ! -f "$milestone" ]; then
+  mkdir -p "$state_dir"
+  date -u +%Y-%m-%dT%H:%M:%SZ > "$milestone"
+  printf 'recorded install milestone %s\n' "$milestone"
+fi
+
 printf '\nRex runs on Codex. The scripts stay in this repo; the command file calls them\n'
 printf 'from here:\n\n'
 printf '  %s/scripts/session-digest.mjs\n' "$repo_dir"
 printf '  %s/scripts/log-intervention.mjs\n\n' "$repo_dir"
-printf 'Both need Node 18 or later and no dependencies.\n'
+printf 'Both need Node 22.5 or later (for node:sqlite) and no dependencies.\n'

@@ -1,4 +1,4 @@
-import { statSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { extname, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -14,12 +14,23 @@ const systemCommand = (command, args) => {
 export function collectSourceInventory({
   claudeRoot = join(homedir(), '.claude'), codexRoot = join(homedir(), '.codex'),
   shareViewRoot = join(homedir(), 'Developer', 'ShareView'), rexRoot = join(homedir(), 'Developer', 'rex'),
+  stateRoot = join(process.env.XDG_DATA_HOME ?? join(homedir(), '.local', 'share'), 'rex'),
   from, to, command,
 } = {}) {
   const run = command ?? ((name) => name === 'chattr state' ? systemCommand('chattr', ['state']) :
     systemCommand('git', ['-C', rexRoot, 'log', '--reverse', '--format=%cI', '--', 'scripts/install.sh']));
   const candidates = [];
   const missingCandidates = [];
+  // The installer writes this once and never overwrites it, so it survives reinstalls that
+  // reset every mtime candidate below. Prefer it whenever it is present and parseable.
+  const installRecordPath = join(stateRoot, 'installed-at');
+  const recordFound = discover(installRecordPath);
+  if (recordFound.files.length) {
+    let raw = null;
+    try { raw = readFileSync(installRecordPath, 'utf8').trim(); } catch { /* becomes a gap below */ }
+    if (raw && Number.isFinite(Date.parse(raw))) candidates.push({ source: 'install record', at: new Date(raw).toISOString() });
+    else missingCandidates.push({ source: 'install record', status: 'unparseable' });
+  } else missingCandidates.push({ source: 'install record', status: recordFound.dangling ? 'dangling' : 'missing' });
   for (const [source, path] of [
     ['install.sh mtime', join(rexRoot, 'scripts', 'install.sh')],
     ['installed Claude command mtime', join(claudeRoot, 'commands', 'rex.md')],
@@ -33,10 +44,10 @@ export function collectSourceInventory({
   const firstCommit = git.status === 0 ? git.stdout.trim().split('\n').find(Boolean) : null;
   if (firstCommit && Number.isFinite(Date.parse(firstCommit))) candidates.push({ source: 'first installer commit', at: firstCommit });
   else missingCandidates.push({ source: 'first installer commit', status: 'missing' });
-  const chosen = candidates.find((row) => row.source === 'installed Claude command mtime') ??
-    candidates.find((row) => row.source === 'installed Codex agent mtime') ??
-    candidates.find((row) => row.source === 'install.sh mtime') ??
-    candidates.find((row) => row.source === 'first installer commit') ?? null;
+  // Without a record, mtimes reset on every reinstall but the earliest candidate (usually the
+  // first installer commit) does not, so picking the minimum date is what stays stable.
+  const chosen = candidates.find((row) => row.source === 'install record') ??
+    candidates.reduce((earliest, row) => !earliest || Date.parse(row.at) < Date.parse(earliest.at) ? row : earliest, null);
   const effectiveFrom = from === 'since-installed' ? chosen?.at ?? null : from;
   const sources = [...claudeSources(claudeRoot, effectiveFrom, to), ...codexSources(codexRoot, effectiveFrom, to)];
   const projectKey = shareViewRoot.replaceAll(/[^a-zA-Z0-9]/g, '-');
@@ -62,14 +73,15 @@ export function collectSourceInventory({
     limit: 'Git history and file mtimes are candidate installation dates, not definitive proof of activation.',
     coverage: { status: candidates.length ? 'readable' : 'missing', files: candidates.length,
       missing: missingCandidates.filter((row) => row.status === 'missing').length,
-      dangling: missingCandidates.filter((row) => row.status === 'dangling').length, unreadable: 0, unparseable: 0,
+      dangling: missingCandidates.filter((row) => row.status === 'dangling').length, unreadable: 0,
+      unparseable: missingCandidates.filter((row) => row.status === 'unparseable').length,
       rows: candidates.length, rowsInWindow: null }, facts: { candidates: candidates.length } });
   const claude = sources.find((row) => row.id === 'claude.projects');
   const codex = collectCodexTokens(codexRoot, effectiveFrom, to);
   return { window: { from: effectiveFrom ?? null, toExclusive: to ?? null, requestedFrom: from ?? null }, sources,
     providerTokens: { claude: claude.facts.tokens ?? null, codex: codex.tokens },
     tokenCoverage: { codex: codex.coverage },
-    installMilestones: { candidates, missingCandidates, chosen, limit: 'File mtimes can change on reinstall; choose explicitly for since-installed reporting.' },
+    installMilestones: { candidates, missingCandidates, chosen, limit: 'The installer\'s own record is preferred when present; otherwise the earliest candidate is used because file mtimes reset on reinstall.' },
     unavailable: [...(from === 'since-installed' && !chosen ? ['installation date; showing all available history'] : []),
       'dollars actually paid', 'human attention', 'avoidable waiting', 'delegation speedup', 'Rex causal effect'] };
 }
