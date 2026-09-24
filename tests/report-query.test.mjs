@@ -111,6 +111,12 @@ test('clarifies material ambiguity and unsupported named project', () => {
   assert.equal(resolveReportQuery('compare that with last month', context).status, 'clarification');
   assert.equal(resolveReportQuery('Show all my usage sometime recently', context).status, 'clarification');
   assert.equal(resolveReportQuery('Show Claude Opus 6 usage', context).status, 'clarification');
+  assert.equal(resolveReportQuery('Show GPT-5 usage', context).status, 'clarification');
+  assert.equal(resolveReportQuery('Show Gemini 2.5 usage', context).status, 'clarification');
+  assert.equal(resolveReportQuery('Show Claude Opus 5.1 usage', context).status, 'clarification');
+  assert.equal(resolveReportQuery('Show Nova-7 usage', context).status, 'clarification');
+  assert.equal(resolveReportQuery('Show o3 usage', context).status, 'clarification');
+  assert.deepEqual(resolveReportQuery('Show Claude Opus 5 usage', context).query.models, ['claude-opus-5']);
 });
 
 test('does not invent a range for an unqualified request', () => {

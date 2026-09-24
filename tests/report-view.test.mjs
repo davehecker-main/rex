@@ -65,6 +65,31 @@ test('comparison is explicit and cannot turn an unknown full cost into a known d
   assert.match(renderReportHtml(view), /Comparison/);
 });
 
+test('intervention evidence shows values, supporting sessions, unknown reason, and noncausation caveat in both views', () => {
+  const assessment = { health: { status: 'unknown', basis: 'Coverage incomplete.' },
+    timeSinks: { status: 'unknown', reason: 'Active time unmeasured.' },
+    contentAnalysis: { status: 'not-requested' }, semanticFindings: [], interventions: [
+      { finding: 'Batch asks', followThrough: 'acted', laterEvidence: {
+        status: 'suggests-improvement', metric: 'interruptionsPer100HumanTurns',
+        baseline: 50, current: 25, evidence: { baselineSessions: ['session-a'], currentSessions: ['session-b'] },
+        caveat: 'A before/after comparison cannot establish causation.',
+      } },
+      { finding: 'Unmeasurable habit', followThrough: 'unknown', laterEvidence: {
+        status: 'unknown', reason: 'No supported before/after metric was supplied.',
+      } },
+    ] };
+  const view = buildReportView(sample(), { assessment });
+  for (const output of [renderReportHtml(view), renderReportTerminal(view)]) {
+    assert.match(output, /interruptionsPer100HumanTurns/);
+    assert.match(output, /50/);
+    assert.match(output, /25/);
+    assert.match(output, /session-a/);
+    assert.match(output, /session-b/);
+    assert.match(output, /cannot establish causation/);
+    assert.match(output, /No supported before\/after metric was supplied/);
+  }
+});
+
 test('browser is the safe default and explicit terminal falls back when unsupported', () => {
   assert.deepEqual(chooseReportSurface({}), { surface: 'browser', notice: null });
   assert.equal(chooseReportSurface({ preference: 'terminal', terminalSupported: true }).surface, 'terminal');

@@ -88,14 +88,23 @@ function detectProjects(text, projects, previous) {
 }
 
 function detectModels(text, models, previous) {
+  const mentionPattern = /\b(?:claude[ .-]?)?(?:opus|sonnet|haiku|fable|gpt|gemini|llama|grok|mistral|qwen|deepseek)(?:[ .-]+\d+(?:[ .-]+\d+)*)?\b/gi;
+  const mentions = [...text.matchAll(mentionPattern)]
+    .map((match) => match[0]);
+  const normalized = (name) => name.toLowerCase().replace(/^claude[ .-]+/, '').replace(/[ .-]+/g, '-');
+  const selected = [];
+  for (const mention of mentions) {
+    const match = models.find((model) => normalized(model) === normalized(mention));
+    if (!match) return { question: `Which available model did you mean by “${mention}”?` };
+    if (!selected.includes(match)) selected.push(match);
+  }
+  const remaining = text.replace(mentionPattern, ' ').replace(/\b\d{4}-\d{2}-\d{2}\b/g, ' ')
+    .replace(/\b(?:last|past)\s+\d+\s+days\b/gi, ' ')
+    .replace(/\bfinding\s+(?:rex|metric|content)-[a-z0-9-]+\b/gi, ' ');
+  const unfamiliar = remaining.match(/\b(?:[A-Za-z][A-Za-z0-9]*[-.]\d[\w.-]*|[A-Z][A-Za-z]+\s+\d+(?:\.\d+)*|o\d+)\b/i);
+  if (unfamiliar) return { question: `Which available model did you mean by “${unfamiliar[0]}”?` };
+  if (selected.length) return { value: selected };
   if (/\b(?:every|all) models\b/i.test(text)) return { value: [] };
-  const found = models.filter((model) => {
-    const short = model.replace(/^claude-/, '').replace(/-/g, '[ -]?');
-    return new RegExp(`\\b(?:claude[ -]?)?${short}\\b`, 'i').test(text);
-  });
-  if (found.length) return { value: found };
-  const named = text.match(/\b(?:claude[ -]?)?(opus|sonnet|haiku|fable)(?:[ -.]+\d+(?:[ -.]+\d+)?)?\b/i);
-  if (named) return { question: `Which available model did you mean by “${named[0]}”?` };
   return { value: previous?.models ?? [] };
 }
 
