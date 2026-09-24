@@ -156,11 +156,14 @@ export function runReportRequest(request, {
   const contentEvidence = query.contentAnalysis ? (semanticEvidence.length ? semanticEvidence :
     collectSemanticEvidence({ root, from: options.from, to: options.to,
       projects: query.projects, session: options.session })) : [];
-  // Compare parent projects (each with its worktree dirs); two dirs of one parent compare as-is.
+  // Compare parent projects (each with its worktree dirs). Two dirs of one parent compare as-is,
+  // unless they are that whole project (a main dir plus its only worktree).
   const parents = [...new Set(query.projects.map(projectParent))];
+  const wholeProject = parents.length === 1 &&
+    projects.filter(({ key }) => projectParent(key) === parents[0]).length === query.projects.length;
   const groups = query.kind !== 'comparison' ? null : parents.length === 2
     ? parents.map((parent) => query.projects.filter((key) => projectParent(key) === parent))
-    : query.projects.length === 2 ? query.projects.map((key) => [key]) : null;
+    : query.projects.length === 2 && !wholeProject ? query.projects.map((key) => [key]) : null;
   const names = groups?.map((keys) => projectName(keys[0]));
   const assessment = assessReport(report, { baseline,
     projectComparison: groups?.map((keys, i) => ({ keys,

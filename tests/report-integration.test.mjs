@@ -488,3 +488,18 @@ test('context omits the coverage finding sessions and a drill-down on an unstore
     assert.equal(drill.view.finding.id, 'coverage');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+test('a project with exactly one worktree dir is compared across periods, not main against worktree', () => {
+  const base = mkdtempSync(join(tmpdir(), 'rex-one-worktree-'));
+  try {
+    const claude = join(base, 'claude');
+    for (const [i, key] of ['-Users-d-Developer-ShareView', '-Users-d-Developer-ShareView--claude-worktrees-one'].entries()) {
+      mkdirSync(join(claude, 'projects', key), { recursive: true });
+      writeFileSync(join(claude, 'projects', key, `s${i}.jsonl`), JSON.stringify(priceable(`r${i}`, `s${i}`)));
+    }
+    const result = runReportRequest('Compare ShareView this week with last week', { root: claude, deliver: false,
+      now: '2026-09-23T18:00:00Z', timeZone: 'America/Los_Angeles' });
+    assert.equal(result.query.projects.length, 2);
+    assert.deepEqual(result.assessment.comparisons.map((item) => item.dimension), ['period']);
+  } finally { rmSync(base, { recursive: true, force: true }); }
+});
