@@ -75,8 +75,10 @@ function previousPeriod(query, timeZone) {
 // Report vocabulary and bare numbers are never project names, whatever a folder is called.
 const notProjectName = /^(?:\d+|sessions?|evidence|findings?|usage|tokens?|cost|report|history|metrics|browser|terminal|this|that|all|every)$/i;
 
+const breadth = /\b(?:every|all|each)\s+(?:of\s+my\s+)?projects?\b|\bacross\s+(?:every|all)\b|\ball\s+(?:of\s+)?my\s+usage\b/i;
+
 function detectProjects(text, projects, previous, sourceRequest = false, inherit = true) {
-  if (/\b(?:every|all|each)\s+(?:of\s+my\s+)?projects?\b|\bacross\s+(?:every|all)\b|\ball\s+(?:of\s+)?my\s+usage\b/i.test(text)) return { value: [] };
+  if (breadth.test(text)) return { value: [] };
   text = text.replace(/\bfinding\s+(?:rex|metric|content)-[a-z0-9-]+\b/gi, ' ');
   const matches = projects.filter(({ name, key }) => {
     if (notProjectName.test(name)) name = key;
@@ -141,10 +143,10 @@ export function resolveReportQuery(request, {
   const drillDown = /\b(?:sessions?|evidence)\s+behind\s+(?:(?:that|this)\s+finding|finding\s+(?:[a-z0-9-]+))\b/i.test(text);
   const selected = calendarPeriod(text, today, timeZone);
   // A request that states its own range or breadth is a new report; only a request that refers
-  // back ("only…", "that…", "this report") refines the previous one's scope and opt-ins.
-  const refersBack = /\b(?:only|that|it|same|those|these)\b|\bthis\b(?!\s+(?:week|month|year|session)\b)/i.test(text);
-  const fresh = !refersBack && (selected !== null || sinceInstalled ||
-    /\b(?:every|all|each)\s+(?:of\s+my\s+)?projects?\b|\bacross\s+(?:every|all)\b|\ball\s+(?:of\s+)?my\s+usage\b/i.test(text));
+  // back in an explicit follow-up form ("only…", "compare that…", "open this…", "that report",
+  // a finding drill-down) refines the previous one's scope and opt-ins.
+  const followsUp = drillDown || /^\s*(?:(?:and|now|then)\s+)?only\b|\b(?:that|this)\s+(?:report|finding)\b|\b(?:compare|open|show|filter|narrow)\s+(?:that|this|it)\b/i.test(text);
+  const fresh = !followsUp && (selected !== null || sinceInstalled || breadth.test(text));
   const prior = fresh ? null : previous;
   // A drill-down re-shows the earlier report's finding, so it keeps that report's scope as-is.
   const projectResult = drillDown ? { value: previous?.projects ?? [] } :
@@ -174,7 +176,7 @@ export function resolveReportQuery(request, {
   const kind = drillDown ? 'sessions' : sourceRequest ? 'source-inventory' : comparison ? 'comparison' :
     /\b(?:recommend(?:ed|ations?)?|interventions?|changes rex)\b/i.test(text) ? 'intervention' :
     /\b(?:habits?|behavior|time sinks?|wasting time|interruptions?)\b/i.test(text) ? 'behavior' :
-    previous && !hasNewKind ? previous.kind : 'usage';
+    prior && !hasNewKind ? prior.kind : 'usage';
   const explicitOptIn = /\b(?:analy[sz]e|inspect|review)\s+(?:the\s+)?(?:transcript|session|conversation)\s+content\b|\b(?:deep|semantic)\s+content\s+analysis\b/i.test(text);
   const metricsOnly = /\bmetrics[- ]only\b/i.test(text);
   const query = {
@@ -186,10 +188,10 @@ export function resolveReportQuery(request, {
     projects: projectResult.value,
     models: modelResult.value,
     timeZone,
-    contentAnalysis: metricsOnly ? false : explicitOptIn || (refersBack && previous?.contentAnalysis === true),
+    contentAnalysis: metricsOnly ? false : explicitOptIn || (followsUp && previous?.contentAnalysis === true),
     surface: /\b(?:browser|web page)\b/i.test(text) ? 'browser' : /\b(?:terminal|tui)\b/i.test(text) ? 'terminal' : previous?.surface ?? 'default',
-    findingId: drillDown ? explicitFindingId ?? previous?.findingId ?? null : previous?.findingId ?? null,
-    findingIds: previous?.findingIds ?? [],
+    findingId: drillDown ? explicitFindingId ?? previous?.findingId ?? null : prior?.findingId ?? null,
+    findingIds: prior?.findingIds ?? [],
     currentSession: /\b(?:current|this) session\b/i.test(text) ||
       (prior?.currentSession === true && !/\b(?:(?:all|every) sessions|all available history|all history)\b/i.test(text)),
   };

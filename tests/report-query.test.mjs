@@ -210,3 +210,29 @@ test('drill-down keeps the prior scope and never matches project names against c
   assert.deepEqual(single.query.projects, prior.projects);
   assert.deepEqual(resolveReportQuery('Show usage for my sessions this week', { ...context, projects }).query.projects, []);
 });
+
+test('a fresh-scope request resets models, content opt-in, kind and finding even when it says "it"', () => {
+  const opted = resolveReportQuery('Analyze the session content for this week with opus 5', context).query;
+  assert.deepEqual(opted.models, ['claude-opus-5']);
+  const fresh = resolveReportQuery('Show all my usage across every project for the last month and what it cost', { ...context, previous: opted }).query;
+  assert.deepEqual(fresh.models, []);
+  assert.equal(fresh.contentAnalysis, false);
+  const drill = { ...opted, kind: 'sessions', findingId: 'rex-1', findingIds: ['rex-1'] };
+  const history = resolveReportQuery('Show all available history', { ...context, previous: drill }).query;
+  assert.equal(history.kind, 'usage');
+  assert.equal(history.findingId, null);
+  assert.deepEqual(history.findingIds, []);
+});
+
+test('a drill-down keeps the earlier report period and content opt-in unless it states new ones', () => {
+  const prior = { ...resolveReportQuery('Analyze the session content for ShareView last week', context).query,
+    findingId: null, findingIds: ['rex-1'] };
+  assert.equal(prior.contentAnalysis, true);
+  const drill = resolveReportQuery('show the sessions behind finding rex-1', { ...context, previous: prior }).query;
+  assert.deepEqual(drill.period, prior.period);
+  assert.equal(drill.contentAnalysis, true);
+  assert.deepEqual(drill.projects, prior.projects);
+  const narrowed = resolveReportQuery('show the sessions behind finding rex-1 this week, metrics only', { ...context, previous: prior }).query;
+  assert.deepEqual(narrowed.period, resolveReportQuery('Show usage this week', context).query.period);
+  assert.equal(narrowed.contentAnalysis, false);
+});
