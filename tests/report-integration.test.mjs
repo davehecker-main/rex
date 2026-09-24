@@ -452,3 +452,39 @@ test('drill-down without stored findings re-derives them from the collected repo
     assert.equal(legacy.view.finding.id, 'coverage');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+test('project comparison keeps same-basename dirs and two worktrees of one project apart', () => {
+  const base = mkdtempSync(join(tmpdir(), 'rex-compare-'));
+  try {
+    const claude = join(base, 'claude');
+    const keys = ['-Users-a-app', '-Users-b-app', '-Users-a-app--claude-worktrees-one', '-Users-a-app--claude-worktrees-two'];
+    for (const [i, key] of keys.entries()) {
+      mkdirSync(join(claude, 'projects', key), { recursive: true });
+      writeFileSync(join(claude, 'projects', key, `s${i}.jsonl`), JSON.stringify(priceable(`r${i}`, `s${i}`)));
+    }
+    const options = { root: claude, deliver: false, now: '2026-09-23T18:00:00Z', timeZone: 'America/Los_Angeles' };
+    const period = { from: '2026-09-21T07:00:00.000Z', to: '2026-09-28T07:00:00.000Z' };
+    const comparePeriod = { from: '2026-09-14T07:00:00.000Z', to: '2026-09-21T07:00:00.000Z' };
+    const compare = (projects) => runReportRequest('Compare these projects this week with last week', { ...options,
+      queryOverride: { kind: 'comparison', projects, period, comparePeriod } }).assessment.comparisons.find((item) => item.dimension === 'project');
+    const basenames = compare(['-Users-a-app', '-Users-a-app--claude-worktrees-one', '-Users-b-app']);
+    assert.deepEqual([basenames.evidence.currentSessions, basenames.evidence.baselineSessions], [['s0', 's2'], ['s1']]);
+    const worktrees = compare(['-Users-a-app--claude-worktrees-one', '-Users-a-app--claude-worktrees-two']);
+    assert.deepEqual([worktrees.evidence.currentSessions, worktrees.evidence.baselineSessions], [['s2'], ['s3']]);
+  } finally { rmSync(base, { recursive: true, force: true }); }
+});
+
+test('context omits the coverage finding sessions and a drill-down on an unstored finding re-derives it', () => {
+  try {
+    fixture();
+    const options = { root: claudeRoot, outputDir, now: '2026-09-23T18:00:00Z',
+      timeZone: 'America/Los_Angeles', openBrowser: () => {} };
+    const first = runReportRequest('Show usage this week', options);
+    assert.ok(first.context.query.findingIds.includes('coverage'));
+    assert.ok(!first.context.findings.some((entry) => entry.id === 'coverage'));
+    const drill = runReportRequest('show the sessions behind finding coverage', { ...options,
+      previous: JSON.parse(JSON.stringify(first.context)) });
+    assert.equal(drill.status, 'delivered');
+    assert.equal(drill.view.finding.id, 'coverage');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
