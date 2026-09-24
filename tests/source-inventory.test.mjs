@@ -12,8 +12,9 @@ const fixture = () => {
   const codexRoot = join(root, 'codex');
   const shareViewRoot = join(root, 'shareview');
   const rexRoot = join(root, 'rex');
+  const stateRoot = join(root, 'state');
   for (const path of [claudeRoot, codexRoot, shareViewRoot, rexRoot]) mkdirSync(path);
-  return { claudeRoot, codexRoot, shareViewRoot, rexRoot, from: '2026-09-20', to: '2026-09-23', command: () => ({ status: 1, stdout: '' }) };
+  return { claudeRoot, codexRoot, shareViewRoot, rexRoot, stateRoot, from: '2026-09-20', to: '2026-09-23', command: () => ({ status: 1, stdout: '' }) };
 };
 const file = (path, body) => { mkdirSync(join(path, '..'), { recursive: true }); writeFileSync(path, body); };
 const source = (report, id) => report.sources.find((row) => row.id === id);
@@ -93,6 +94,29 @@ test('since-installed falls back to first installer commit and reports an unavai
   assert.equal(unavailable.window.from, null);
   assert.equal(unavailable.installMilestones.chosen, null);
   assert.equal(source(unavailable, 'rex.install').coverage.status, 'missing');
+});
+
+test('prefers a recorded install milestone over any mtime or git candidate', () => {
+  const options = fixture();
+  file(join(options.claudeRoot, 'commands', 'rex.md'), 'installed');
+  utimesSync(join(options.claudeRoot, 'commands', 'rex.md'), new Date('2026-09-23T00:00:00Z'), new Date('2026-09-23T00:00:00Z'));
+  file(join(options.stateRoot, 'installed-at'), '2026-09-01T00:00:00Z\n');
+  options.command = () => ({ status: 0, stdout: '2026-09-20T00:00:00Z\n' });
+  options.from = 'since-installed';
+  const report = collectSourceInventory(options);
+  assert.equal(report.installMilestones.chosen.source, 'install record');
+  assert.equal(report.window.from, '2026-09-01T00:00:00.000Z');
+});
+
+test('without a record, picks the earliest candidate so reinstalled mtimes cannot win', () => {
+  const options = fixture();
+  file(join(options.claudeRoot, 'commands', 'rex.md'), 'installed');
+  utimesSync(join(options.claudeRoot, 'commands', 'rex.md'), new Date('2026-09-23T00:00:00Z'), new Date('2026-09-23T00:00:00Z'));
+  options.command = () => ({ status: 0, stdout: '2026-09-01T00:00:00Z\n' });
+  options.from = 'since-installed';
+  const report = collectSourceInventory(options);
+  assert.equal(report.installMilestones.chosen.source, 'first installer commit');
+  assert.equal(report.window.from, '2026-09-01T00:00:00Z');
 });
 
 test('lists candidate install milestones and labels live claims as a snapshot', () => {
