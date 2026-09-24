@@ -160,6 +160,11 @@ runtime rather than anything about the engineer's attention.
 This version is a definition, not a system: two files to install, two scripts with no
 dependencies, and nothing running between consults. The earlier tree is tagged `v2-archive`.
 
+## Issues
+
+Issues for Rex are filed in [sempervire/dev-tools](https://github.com/sempervire/dev-tools/issues),
+with a `Repo: rex` line in the body.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
