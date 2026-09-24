@@ -2,6 +2,7 @@ import { projectName } from './report-query.mjs';
 
 const number = (value) => Number.isFinite(value) ? value.toLocaleString('en-US') : 'unknown';
 const money = (value) => Number.isFinite(value) ? `$${value.toFixed(value < .01 ? 4 : 2)}` : 'unknown';
+const moneyDelta = (value) => value === null ? 'unknown' : `${value < 0 ? '-' : '+'}${money(Math.abs(value))}`;
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
 })[char]);
@@ -52,6 +53,7 @@ export function buildReportView(report, { compareTo, assessment, query, findings
       assistantRows: coverage.assistantRows ?? 0 },
     sections,
     comparison: null,
+    projectComparison: assessment?.comparisons?.find((entry) => entry.dimension === 'project') ?? null,
     assessment: assessment ?? null,
     findings,
     finding,
@@ -80,6 +82,12 @@ function interventionText(item) {
   const after = evidence.evidence?.currentSessions?.join(', ') || 'unknown sessions';
   return `${start}; ${evidence.metric}: baseline ${number(evidence.baseline)} (${before}), current ${number(evidence.current)} (${after}); ${evidence.caveat ?? ''}`;
 }
+const delta = (value) => value === null ? 'unknown' : `${value >= 0 ? '+' : ''}${number(value)}`;
+const costOf = (value) => value === null ? 'unknown' : money(value);
+function projectComparisonText(pc) {
+  const requests = pc.metrics.requests, cost = pc.metrics.apiEquivalentUsd;
+  return `Project comparison: ${pc.labels.current} vs ${pc.labels.baseline}; requests ${number(requests.current)} vs ${number(requests.baseline)} (delta ${delta(requests.delta)}); estimated cost ${costOf(cost.current)} vs ${costOf(cost.baseline)} (delta ${moneyDelta(cost.delta)})`;
+}
 const columns = ['Key', 'Metered requests', 'Tokens', 'Known API equivalent', 'Unpriced'];
 const cells = (row) => [row.key, number(row.requests), number(row.tokens), money(row.knownApiEquivalentUsd), number(row.unpricedRequests)];
 
@@ -95,7 +103,12 @@ export function renderReportTerminal(view) {
   lines.push(`Projects: ${view.scope.projects?.length ? view.scope.projects.join(', ') : 'all available'}; models: ${view.scope.models?.length ? view.scope.models.join(', ') : 'all available'}`);
   if (view.scope.interventionPeriod) lines.push(`Interventions selected: ${view.scope.interventionPeriod.from} to ${view.scope.interventionPeriod.to} (exclusive)`);
   if (view.scope.behaviorMeaning) lines.push(`Behavior scope: ${view.scope.behaviorMeaning}`);
-  if (view.comparison) lines.push(`Comparison: ${view.comparison.label}; requests ${view.comparison.requestsDelta >= 0 ? '+' : ''}${number(view.comparison.requestsDelta)}; tokens ${view.comparison.tokensDelta >= 0 ? '+' : ''}${number(view.comparison.tokensDelta)}; estimated cost delta ${view.comparison.apiEquivalentUsdDelta === null ? 'unknown' : money(view.comparison.apiEquivalentUsdDelta)}`);
+  if (view.comparison) lines.push(`Comparison: ${view.comparison.label}; requests ${view.comparison.requestsDelta >= 0 ? '+' : ''}${number(view.comparison.requestsDelta)}; tokens ${view.comparison.tokensDelta >= 0 ? '+' : ''}${number(view.comparison.tokensDelta)}; estimated cost delta ${moneyDelta(view.comparison.apiEquivalentUsdDelta)}`);
+  if (view.projectComparison) {
+    lines.push(projectComparisonText(view.projectComparison));
+    lines.push(`  ${view.projectComparison.labels.current} sessions: ${view.projectComparison.evidence.currentSessions.join(', ') || 'none'}`);
+    lines.push(`  ${view.projectComparison.labels.baseline} sessions: ${view.projectComparison.evidence.baselineSessions.join(', ') || 'none'}`);
+  }
   if (view.assessment) {
     lines.push('', 'Assessment', `Health: ${view.assessment.health.status} — ${view.assessment.health.basis}`,
       `Time sinks: ${view.assessment.timeSinks.status} — ${view.assessment.timeSinks.reason}`,
@@ -166,7 +179,11 @@ export function renderReportHtml(view) {
   const gaps = view.coverage.gaps.length
     ? view.coverage.gaps.map((gap) => `<li>${escapeHtml(gap.label)}: ${number(gap.value)}</li>`).join('')
     : '<li>No recorded gaps</li>';
-  const comparison = view.comparison ? `<section><h2>Comparison</h2><p>Baseline: ${escapeHtml(view.comparison.label)}. Requests: ${number(view.comparison.requestsDelta)}; tokens: ${number(view.comparison.tokensDelta)}; estimated cost difference: ${view.comparison.apiEquivalentUsdDelta === null ? 'unknown' : money(view.comparison.apiEquivalentUsdDelta)}.</p></section>` : '';
+  const comparison = view.comparison ? `<section><h2>Comparison</h2><p>Baseline: ${escapeHtml(view.comparison.label)}. Requests: ${number(view.comparison.requestsDelta)}; tokens: ${number(view.comparison.tokensDelta)}; estimated cost difference: ${moneyDelta(view.comparison.apiEquivalentUsdDelta)}.</p></section>` : '';
+  const projectComparison = view.projectComparison ? (() => {
+    const pc = view.projectComparison, requests = pc.metrics.requests, cost = pc.metrics.apiEquivalentUsd;
+    return `<section><h2>Project comparison</h2><p>${escapeHtml(pc.labels.current)} vs ${escapeHtml(pc.labels.baseline)}</p><table><thead><tr><th scope="col"></th><th scope="col">${escapeHtml(pc.labels.current)}</th><th scope="col">${escapeHtml(pc.labels.baseline)}</th><th scope="col">Delta</th></tr></thead><tbody><tr><td>Requests</td><td>${number(requests.current)}</td><td>${number(requests.baseline)}</td><td>${delta(requests.delta)}</td></tr><tr><td>Estimated cost</td><td>${costOf(cost.current)}</td><td>${costOf(cost.baseline)}</td><td>${moneyDelta(cost.delta)}</td></tr></tbody></table><p>Supporting sessions — ${escapeHtml(pc.labels.current)}: ${escapeHtml(pc.evidence.currentSessions.join(', ') || 'none')}. ${escapeHtml(pc.labels.baseline)}: ${escapeHtml(pc.evidence.baselineSessions.join(', ') || 'none')}.</p><p>${escapeHtml(pc.caveat)}</p></section>`;
+  })() : '';
   const assessment = view.assessment ? `<section><h2>Assessment</h2>${view.assessment.rexJudgment ? `<h3>Rex's assessment</h3><p>${escapeHtml(view.assessment.rexJudgment.summary)}</p><ul>${view.assessment.rexJudgment.findings.map((item) => `<li>${escapeHtml(item.label)} (${escapeHtml(item.status)}): ${escapeHtml(item.sessions.join(', '))}. ${escapeHtml(item.caveat)}</li>`).join('') || '<li>No supported finding</li>'}</ul>` : ''}<p>Health: ${escapeHtml(view.assessment.health.status)} — ${escapeHtml(view.assessment.health.basis)}</p><p>Time sinks: ${escapeHtml(view.assessment.timeSinks.status)} — ${escapeHtml(view.assessment.timeSinks.reason)}</p><p>Content analysis: ${escapeHtml(view.assessment.contentAnalysis.status)}${view.assessment.contentAnalysis.status === 'insufficient-evidence' ? ' (explicit opt-in; no supported semantic evidence supplied)' : ''}</p><h3>Findings and evidence</h3><ul>${view.findings.map((item) => `<li id="finding-${escapeHtml(item.id)}"><strong>${escapeHtml(item.id)}</strong>: ${escapeHtml(item.label)} (${escapeHtml(item.status)}): sessions ${escapeHtml(item.sessions.join(', '))}. ${escapeHtml(item.caveat)}</li>`).join('') || '<li>No supported metric finding</li>'}</ul><h3>Content findings</h3><ul>${view.assessment.semanticFindings.map((item) => `<li>${escapeHtml(item.label)}: ${escapeHtml(item.evidence.map((entry) => `${entry.session}:${entry.reference}`).join(', '))}. ${escapeHtml(item.caveat ?? '')}</li>`).join('') || '<li>None with attributable evidence</li>'}</ul><h3>Interventions</h3><ul>${view.assessment.interventions.map((item) => `<li>${escapeHtml(interventionText(item))}</li>`).join('') || '<li>None in the available intervention log</li>'}</ul>${view.finding ? `<h3>Supporting sessions for ${escapeHtml(view.finding.id)}</h3><p>${escapeHtml(view.finding.sessions.join(', '))}</p>` : ''}</section>` : '';
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(view.title)}</title><style>
     :root{color-scheme:light dark;font:16px system-ui,sans-serif}body{max-width:1100px;margin:auto;padding:2rem;line-height:1.5}h1{margin-bottom:.2rem}.sub{color:gray;margin-top:0}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:1rem}.card,section{border:1px solid #9996;border-radius:.6rem;padding:1rem;margin:1rem 0}.card strong{display:block;font-size:1.5rem}.scroll{overflow:auto}table{border-collapse:collapse;width:100%}th,td{text-align:left;padding:.45rem;border-bottom:1px solid #9996}th{white-space:nowrap}td:first-child{overflow-wrap:anywhere}label{display:block;margin:1rem 0}input{font:inherit;padding:.5rem;width:min(100%,25rem)}details{margin-top:1rem}.chart{margin:1rem 0}.bar-row{display:grid;grid-template-columns:7rem 1fr 3rem;gap:.5rem;align-items:center}.bar-row meter{width:100%}
@@ -174,7 +191,7 @@ export function renderReportHtml(view) {
   <p>${escapeHtml(view.scope.source)} · ${number(view.scope.files)} files · ${number(view.scope.sessions)} supporting sessions</p><p>Projects: ${escapeHtml(view.scope.projects?.length ? view.scope.projects.join(', ') : 'all available')}; models: ${escapeHtml(view.scope.models?.length ? view.scope.models.join(', ') : 'all available')}</p>${view.scope.interventionPeriod ? `<p>Interventions selected: ${escapeHtml(view.scope.interventionPeriod.from)} to ${escapeHtml(view.scope.interventionPeriod.to)} (exclusive).</p>` : ''}${view.scope.behaviorMeaning ? `<p>${escapeHtml(view.scope.behaviorMeaning)}</p>` : ''}
   <div class="cards"><div class="card">Metered requests<strong>${number(view.summary.requests)}</strong></div><div class="card">${view.sourceInventory ? 'Claude metered tokens' : 'Tokens'}<strong>${number(view.summary.tokens)}</strong></div><div class="card">Tool calls<strong>${number(view.summary.toolCalls)}</strong></div><div class="card">API equivalent<strong>${escapeHtml(costText(view.cost))}</strong></div></div>
   <section><h2>Scope and assumptions</h2><p>Human turns: ${number(view.summary.humanTurns)}; assistant turns: ${number(view.summary.assistantTurns)}; interruptions: ${number(view.summary.interruptions)}; subagent requests: ${number(view.summary.subagentRequests)}.</p><p>${escapeHtml(view.cost.meaning)}. Rates as of ${escapeHtml(view.cost.priceAsOf)}: <a href="${escapeHtml(view.cost.priceSource)}">pricing source</a>. Actual spending is unavailable.</p><details><summary>Coverage details</summary><ul>${gaps}</ul><p>Duplicate rows: ${number(view.coverage.duplicateRows)}.</p></details></section>
-  ${comparison}${assessment}${view.sourceInventory ? inventoryHtml(view.sourceInventory) : ''}<label>Filter rows <input type="search" id="filter" aria-label="Filter report rows"></label>
+  ${comparison}${projectComparison}${assessment}${view.sourceInventory ? inventoryHtml(view.sourceInventory) : ''}<label>Filter rows <input type="search" id="filter" aria-label="Filter report rows"></label>
   ${view.sections.map(table).join('')}
   <script>document.getElementById('filter').addEventListener('input',e=>{const q=e.target.value.toLowerCase();for(const row of document.querySelectorAll('tr[data-search]'))row.hidden=!row.dataset.search.includes(q)});</script>
   </main></body></html>`;

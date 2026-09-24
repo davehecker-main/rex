@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runReportRequest, discoverProjects } from '../scripts/report-runner.mjs';
+import { renderReportTerminal } from '../scripts/report-view.mjs';
 
 const root = mkdtempSync(join(tmpdir(), 'rex-integration-'));
 const claudeRoot = join(root, 'claude');
@@ -54,6 +55,41 @@ test('request opens report artifact, follow-up keeps scope and filters, drill-do
     assert.deepEqual(drill.view.finding.sessions, ['session-a', 'session-c']);
     assert.match(readFileSync(drill.delivery.path, 'utf8'), /session-c/);
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('a project comparison with no compared period still renders totals, deltas, and supporting sessions', () => {
+  const scratch = mkdtempSync(join(tmpdir(), 'rex-integration-project-cmp-'));
+  const scratchClaude = join(scratch, 'claude');
+  const scratchOutput = join(scratch, 'output');
+  try {
+    mkdirSync(scratchOutput, { recursive: true });
+    for (const [project, rows] of [
+      ['-Users-david-Developer-ShareView', [priceable('sv-1', 'session-sv')]],
+      ['-Users-david-Developer-scripts', [priceable('sc-1', 'session-sc')]],
+    ]) {
+      const directory = join(scratchClaude, 'projects', project);
+      mkdirSync(directory, { recursive: true });
+      writeFileSync(join(directory, 'sessions.jsonl'), rows.map((row) => JSON.stringify(row)).join('\n'));
+    }
+    const options = { root: scratchClaude, outputDir: scratchOutput, now: '2026-09-23T18:00:00Z',
+      timeZone: 'America/Los_Angeles', openBrowser: () => {} };
+    const result = runReportRequest('Compare ShareView and scripts this month', options);
+    assert.equal(result.status, 'delivered');
+    assert.ok(result.assessment.comparisons.find((entry) => entry.dimension === 'project'));
+    assert.ok(result.view.projectComparison);
+    assert.deepEqual(result.view.projectComparison.evidence.currentSessions, ['session-sv']);
+    assert.deepEqual(result.view.projectComparison.evidence.baselineSessions, ['session-sc']);
+    const html = readFileSync(result.delivery.path, 'utf8');
+    assert.match(html, /Project comparison/);
+    assert.match(html, /ShareView/);
+    assert.match(html, /scripts/);
+    assert.match(html, /session-sv/);
+    assert.match(html, /session-sc/);
+    const terminal = renderReportTerminal(result.view);
+    assert.match(terminal, /Project comparison: ShareView vs scripts/);
+    assert.match(terminal, /session-sv/);
+    assert.match(terminal, /session-sc/);
+  } finally { rmSync(scratch, { recursive: true, force: true }); }
 });
 
 test('model filter changes totals and explicit opt-in is visible but never reads content silently', () => {
