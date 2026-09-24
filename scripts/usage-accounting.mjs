@@ -30,9 +30,14 @@ const pricedFields = ['input', 'output', 'cacheWrite5m', 'cacheWrite1h', 'cacheR
 const tokenFields = [...pricedFields, 'cacheWriteUnknown'];
 const emptyTokens = () => Object.fromEntries(tokenFields.map((key) => [key, 0]));
 
+// Dated snapshot IDs (claude-haiku-4-5-20251001) are the rate-card model they snapshot.
+const canonicalModel = (model) => {
+  const undated = typeof model === 'string' ? model.replace(/-\d{8}$/, '') : model;
+  return RATE_CARD.models[undated] ? undated : model;
+};
+
 export function priceUsage(model, usage, context = {}) {
-  // Dated snapshot IDs (claude-haiku-4-5-20251001) share their undated entry's rates.
-  const rates = RATE_CARD.models[model] ?? RATE_CARD.models[String(model).replace(/-\d{8}$/, '')];
+  const rates = RATE_CARD.models[model];
   if (!rates) return { status: 'unknown-model', usd: null };
   if (context.speed && context.speed !== 'standard') return { status: 'unknown-speed', usd: null };
   if (context.inference_geo && !['not_available', 'global'].includes(context.inference_geo)) {
@@ -107,6 +112,7 @@ export function collectUsage({ root = join(homedir(), '.claude'), from, to, proj
   if (start !== null && end !== null && start >= end) throw new Error('from must precede to');
   const coverage = { files: 0, missingSource: 0, unreadableDirs: 0, unreadableFiles: 0, malformedLines: 0, assistantRows: 0, rowsWithoutUsage: 0, undatedRows: 0, duplicateRows: 0, unpricedRequests: 0, unpricedByReason: {} };
   const byId = new Map();
+  const citedSessions = sessions ? new Set(sessions) : null;
   const eventSeen = new Set();
   const eventRows = [];
   let discovered;
@@ -130,7 +136,7 @@ export function collectUsage({ root = join(homedir(), '.claude'), from, to, proj
       try { row = JSON.parse(lines[i]); }
       catch { coverage.malformedLines++; continue; }
       const rowSession = row.sessionId ?? rel[1]?.replace(/\.jsonl$/, '');
-      if ((session && rowSession !== session) || (sessions && !sessions.includes(rowSession))) continue;
+      if ((session && rowSession !== session) || (citedSessions && !citedSessions.has(rowSession))) continue;
       const at = time(row.timestamp);
       if (at === null) { if (row.type === 'assistant' || row.type === 'user') coverage.undatedRows++; continue; }
       if ((start !== null && at < start) || (end !== null && at >= end)) continue;
@@ -143,12 +149,13 @@ export function collectUsage({ root = join(homedir(), '.claude'), from, to, proj
         }
       }
       if (row.type !== 'assistant') continue;
-      if (models?.length && !models.includes(row.message?.model)) continue;
+      const model = canonicalModel(row.message?.model);
+      if (models?.length && !models.includes(model)) continue;
       coverage.assistantRows++;
       if (!row.message?.usage) { coverage.rowsWithoutUsage++; continue; }
       const id = row.requestId ?? row.message.id ?? (row.uuid ? `${row.sessionId ?? basename(path)}:${row.uuid}` : `${path}:${i}`);
       const candidate = { id, session: row.sessionId ?? rel[1]?.replace(/\.jsonl$/, '') ?? 'unknown', project: projectName,
-        date: new Date(at).toISOString().slice(0, 10), at, model: row.message.model ?? 'unknown',
+        date: new Date(at).toISOString().slice(0, 10), at, model: model ?? 'unknown',
         subagent: rel.includes('subagents') || row.isSidechain === true,
         usage: row.message.usage, score: (row.message.usage.output_tokens ?? 0) };
       if (byId.has(id)) coverage.duplicateRows++;

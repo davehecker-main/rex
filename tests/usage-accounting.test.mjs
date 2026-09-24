@@ -142,8 +142,19 @@ test('dates API-equivalent rates and never presents an unknown model as actual s
   assert.equal(priceUsage('claude-opus-5', usage(), { speed: 'fast' }).usd, null);
 });
 
-test('dated model IDs resolve to their rate-card entry; unknown models stay unknown', () => {
-  assert.deepEqual(priceUsage('claude-haiku-4-5-20251001', usage()), priceUsage('claude-haiku-4-5', usage()));
-  assert.equal(priceUsage('claude-haiku-4-5-20251001', usage()).status, 'priced');
-  assert.equal(priceUsage('claude-unknown-20251001', usage()).status, 'unknown-model');
+test('dated model IDs are normalized once for pricing, model filters, and grouping; unknown models stay unknown', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rex-accounting-'));
+  try {
+    const project = join(root, 'projects', 'project-a');
+    mkdirSync(project, { recursive: true });
+    const dated = row('u1', 'req-1'); dated.message.model = 'claude-haiku-4-5-20251001';
+    const unknown = row('u2', 'req-2'); unknown.message.model = 'claude-unknown-20251001';
+    writeRows(join(project, 'session-a.jsonl'), [dated, unknown]);
+    const all = collectUsage({ root });
+    assert.deepEqual(all.groups.byModel.map((entry) => entry.key).sort(), ['claude-haiku-4-5', 'claude-unknown-20251001']);
+    assert.equal(all.coverage.unpricedRequests, 1);
+    const haiku = collectUsage({ root, models: ['claude-haiku-4-5'] });
+    assert.equal(haiku.summary.requests, 1);
+    assert.equal(haiku.summary.apiEquivalentUsd, priceUsage('claude-haiku-4-5', usage()).usd);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
