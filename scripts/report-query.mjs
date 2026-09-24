@@ -75,10 +75,17 @@ function previousPeriod(query, timeZone) {
 // Report vocabulary and bare numbers are never project names, whatever a folder is called.
 const notProjectName = /^(?:\d+|sessions?|evidence|findings?|usage|tokens?|cost|report|history|metrics|browser|terminal|this|that|all|every)$/i;
 
-const breadth = /\b(?:every|all|each)\s+(?:of\s+my\s+)?projects?\b|\bacross\s+(?:every|all)\b|\ball\s+(?:of\s+)?my\s+usage\b/i;
+// Each scope dimension is inherited from the previous report unless the request restates it.
+// "All my usage" and "all (available) history" restate the whole scope, so they clear both
+// projects and models; "every project" clears only projects.
+const allScope = /\ball\s+(?:of\s+)?my\s+usage\b|\ball\s+(?:available\s+)?history\b/i;
+const allProjects = /\b(?:every|all|each)\s+(?:of\s+my\s+)?projects?\b/i;
 
-function detectProjects(text, projects, previous, sourceRequest = false, inherit = true) {
-  if (breadth.test(text)) return { value: [] };
+// A Claude worktree dir (<project>--claude-worktrees-<name>) belongs to its parent project.
+export const projectParent = (key) => key.match(/^(.+?)--claude-worktrees-./)?.[1] ?? key;
+export const projectName = (key) => projectParent(key).split('-').filter(Boolean).at(-1) ?? key;
+
+function detectProjects(text, projects, previous, sourceRequest = false) {
   text = text.replace(/\bfinding\s+(?:rex|metric|content)-[a-z0-9-]+\b/gi, ' ');
   const matches = projects.filter(({ name, key }) => {
     if (notProjectName.test(name)) name = key;
@@ -87,14 +94,15 @@ function detectProjects(text, projects, previous, sourceRequest = false, inherit
     return [name, key].some((label) => new RegExp(`(^|[^\\w])${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^\\w]|$)`, 'i').test(text));
   });
   if (matches.length) return { value: matches.map(({ key }) => key) };
+  if (allProjects.test(text) || allScope.test(text)) return { value: [] };
   const named = text.match(/\b(?:only|for|in)\s+([A-Z][\w-]+)\b/);
   if (named && !/^(?:all|every|last|this|usage|tokens|cost|the|my|browser)$/i.test(named[1])) {
     return { question: `Which project did you mean by “${named[1]}”?` };
   }
-  return { value: inherit ? previous?.projects ?? [] : [] };
+  return { value: previous?.projects ?? [] };
 }
 
-function detectModels(text, models, projects, previous, inherit = true) {
+function detectModels(text, models, projects, previous) {
   const mentionPattern = /\b(?:claude[ .-]?)?(?:opus|sonnet|haiku|fable|gpt|gemini|llama|grok|mistral|qwen|deepseek)(?:[ .-]+\d+(?:[ .-]+\d+)*)?\b/gi;
   const mentions = [...text.matchAll(mentionPattern)]
     .map((match) => match[0]);
@@ -117,8 +125,8 @@ function detectModels(text, models, projects, previous, inherit = true) {
     return { question: `Which available model did you mean by “${namedScope}”?` };
   }
   if (selected.length) return { value: selected };
-  if (/\b(?:every|all) models\b/i.test(text)) return { value: [] };
-  return { value: inherit ? previous?.models ?? [] : [] };
+  if (/\b(?:every|all) models\b/i.test(text) || allScope.test(text)) return { value: [] };
+  return { value: previous?.models ?? [] };
 }
 
 function clarification(question) {
@@ -142,24 +150,21 @@ export function resolveReportQuery(request, {
   const sinceInstalled = /\bsince\s+(?:(?:you|rex)\s+(?:were|was)\s+)?installed\b/i.test(text);
   const drillDown = /\b(?:sessions?|evidence)\s+behind\s+(?:(?:that|this)\s+finding|finding\s+(?:[a-z0-9-]+))\b/i.test(text);
   const selected = calendarPeriod(text, today, timeZone);
-  // A request that states its own range or breadth is a new report; only a request that refers
-  // back in an explicit follow-up form ("only…", "compare that…", "open this…", "that report",
-  // a finding drill-down) refines the previous one's scope and opt-ins.
-  const followsUp = drillDown || /^\s*(?:(?:and|now|then)\s+)?only\b|\b(?:that|this)\s+(?:report|finding)\b|\b(?:compare|open|show|filter|narrow)\s+(?:that|this|it)\b/i.test(text);
-  const fresh = !followsUp && (selected !== null || sinceInstalled || breadth.test(text));
-  const prior = fresh ? null : previous;
+  // Content opt-in and a drill-down kind carry forward only when the request refers back to the
+  // previous report ("that", "the same", "only…", "open this"), or is itself a drill-down.
+  const refersBack = drillDown || /^\s*(?:(?:and|now|then)\s+)?only\b|\b(?:that|the same|this report)\b|\b(?:open|show|compare|filter|narrow)\s+(?:it|this(?!\s+(?:week|month|year|session)))\b/i.test(text);
   // A drill-down re-shows the earlier report's finding, so it keeps that report's scope as-is.
   const projectResult = drillDown ? { value: previous?.projects ?? [] } :
-    detectProjects(text, projects, previous, sourceRequest, !fresh);
+    detectProjects(text, projects, previous, sourceRequest);
   if (projectResult.question) return clarification(projectResult.question);
-  const modelResult = drillDown ? { value: previous?.models ?? [] } : detectModels(text, models, projects, previous, !fresh);
+  const modelResult = drillDown ? { value: previous?.models ?? [] } : detectModels(text, models, projects, previous);
   if (modelResult.question) return clarification(modelResult.question);
   if (/\b(?:sometime|recently|a while ago|around then)\b/i.test(text) && !sinceInstalled) {
     return clarification('Which date range should I use?');
   }
   const weekPair = /\bthis week\b.*\b(?:last|previous) week\b/i.test(text);
   const previousComparison = /\b(?:compare|versus|vs\.?|against)\b/i.test(text) &&
-    /\b(?:previous|last) month\b/i.test(text) && /\b(?:that|it|this report)\b/i.test(text);
+    /\b(?:previous|last) month\b/i.test(text) && /\b(?:that|it|this report)\b/i.test(text) && previous;
   const reference = /\b(?:that|it|this report|that finding)\b/i.test(text);
   if (reference && !previous && (previousComparison || /\b(?:show|open|compare)\b/i.test(text))) {
     return clarification('Which earlier report should I use?');
@@ -176,24 +181,24 @@ export function resolveReportQuery(request, {
   const kind = drillDown ? 'sessions' : sourceRequest ? 'source-inventory' : comparison ? 'comparison' :
     /\b(?:recommend(?:ed|ations?)?|interventions?|changes rex)\b/i.test(text) ? 'intervention' :
     /\b(?:habits?|behavior|time sinks?|wasting time|interruptions?)\b/i.test(text) ? 'behavior' :
-    prior && !hasNewKind ? prior.kind : 'usage';
+    previous && !hasNewKind && (previous.kind !== 'sessions' || refersBack) ? previous.kind : 'usage';
   const explicitOptIn = /\b(?:analy[sz]e|inspect|review)\s+(?:the\s+)?(?:transcript|session|conversation)\s+content\b|\b(?:deep|semantic)\s+content\s+analysis\b/i.test(text);
   const metricsOnly = /\bmetrics[- ]only\b/i.test(text);
   const query = {
     kind,
-    history: sinceInstalled ? 'since-installed' : selected?.history ?? prior?.history ?? 'all-available',
-    period: sinceInstalled ? null : selected ? selected.value : prior?.period ?? null,
-    periodUnit: selected?.unit ?? prior?.periodUnit ?? null,
+    history: sinceInstalled ? 'since-installed' : selected?.history ?? previous?.history ?? 'all-available',
+    period: sinceInstalled ? null : selected ? selected.value : previous?.period ?? null,
+    periodUnit: selected?.unit ?? previous?.periodUnit ?? null,
     comparePeriod: null,
     projects: projectResult.value,
     models: modelResult.value,
     timeZone,
-    contentAnalysis: metricsOnly ? false : explicitOptIn || (followsUp && previous?.contentAnalysis === true),
+    contentAnalysis: metricsOnly ? false : explicitOptIn || (refersBack && previous?.contentAnalysis === true),
     surface: /\b(?:browser|web page)\b/i.test(text) ? 'browser' : /\b(?:terminal|tui)\b/i.test(text) ? 'terminal' : previous?.surface ?? 'default',
-    findingId: drillDown ? explicitFindingId ?? previous?.findingId ?? null : prior?.findingId ?? null,
-    findingIds: prior?.findingIds ?? [],
+    findingId: drillDown ? explicitFindingId ?? previous?.findingId ?? null : kind === 'sessions' ? previous.findingId ?? null : null,
+    findingIds: kind === 'sessions' || refersBack ? previous?.findingIds ?? [] : [],
     currentSession: /\b(?:current|this) session\b/i.test(text) ||
-      (prior?.currentSession === true && !/\b(?:(?:all|every) sessions|all available history|all history)\b/i.test(text)),
+      (previous?.currentSession === true && !/\b(?:(?:all|every) sessions|all available history|all history)\b/i.test(text)),
   };
   if (weekPair) {
     query.comparePeriod = calendarPeriod('last week', today, timeZone).value;
@@ -201,12 +206,14 @@ export function resolveReportQuery(request, {
     query.history = previous.history;
     query.period = previous.period;
     query.periodUnit = previous.periodUnit;
-    query.comparePeriod = previousPeriod(previous, timeZone);
+    // "The previous month" of a monthly report is the month before it; otherwise "last month"
+    // is the calendar month.
+    query.comparePeriod = previous.periodUnit === 'month' ? previousPeriod(previous, timeZone) : selected.value;
   } else if (comparison) {
     query.comparePeriod = previousPeriod(query, timeZone);
     if (!query.comparePeriod) return clarification('Which periods should I compare?');
-  } else if (prior && !selected) {
-    query.comparePeriod = prior.comparePeriod ?? null;
+  } else if (previous && !selected) {
+    query.comparePeriod = previous.comparePeriod ?? null;
   }
   return { status: 'resolved', query };
 }

@@ -169,22 +169,43 @@ test('short form "report since you were installed" still recognizes the since-in
   assert.equal(resolved.query.period, null);
 });
 
-test('a request that states its own scope replaces an inherited project, model, and period', () => {
+test('each scope dimension is replaced only when the request restates it', () => {
   const prior = resolveReportQuery('Compare ShareView this week with last week for opus 5 tokens and cost.', context).query;
   for (const request of ['Show all my usage across every project for the last month.',
-    'Show all my usage across all projects for the last month.', 'Show my usage for the last month.']) {
+    'Show all my usage across all projects for the last month.']) {
     const result = resolveReportQuery(request, { ...context, previous: prior });
     assert.deepEqual(result.query.projects, [], request);
     assert.deepEqual(result.query.models, [], request);
     assert.equal(result.query.comparePeriod, null, request);
   }
+  const period = resolveReportQuery('Show my usage for the last month.', { ...context, previous: prior }).query;
+  assert.deepEqual([period.projects, period.models], [prior.projects, prior.models]);
   const history = resolveReportQuery('Review all available history and tell me which habits keep wasting time.', { ...context, previous: prior });
   assert.deepEqual(history.query.projects, []);
   assert.equal(history.query.period, null);
-  const intervention = resolveReportQuery('Did the changes Rex recommended last month help?', { ...context, previous: prior });
-  assert.deepEqual(intervention.query.projects, []);
   assert.deepEqual(resolveReportQuery('Show all my usage.', { ...context, previous: prior }).query.projects, []);
   assert.deepEqual(resolveReportQuery('only ShareView', { ...context, previous: prior }).query.period, prior.period);
+});
+
+test('follow-ups inherit every dimension they do not restate; content needs a reference back', () => {
+  const prior = resolveReportQuery('Analyze the session content for ShareView this week with opus 5', context).query;
+  assert.deepEqual([prior.projects, prior.models, prior.contentAnalysis], [['-Users-david-Developer-ShareView'], ['claude-opus-5'], true]);
+  const lastMonth = resolveReportQuery('Show usage last month', context).query.period;
+  const lastWeek = resolveReportQuery('Show usage last week', context).query.period;
+  const compared = resolveReportQuery('How did that compare to last month?', { ...context, previous: prior }).query;
+  assert.deepEqual([compared.projects, compared.models, compared.contentAnalysis, compared.kind],
+    [prior.projects, prior.models, true, 'comparison']);
+  assert.deepEqual(compared.comparePeriod, lastMonth);
+  const everyProject = resolveReportQuery("Show this week's usage across every project", { ...context, previous: prior }).query;
+  assert.deepEqual([everyProject.projects, everyProject.models, everyProject.contentAnalysis], [[], prior.models, false]);
+  const allModels = resolveReportQuery('Show ShareView usage across all models this week', { ...context, previous: prior }).query;
+  assert.deepEqual([allModels.projects, allModels.models], [prior.projects, []]);
+  for (const request of ['Show the same for last week', 'What did that cost last week?']) {
+    const result = resolveReportQuery(request, { ...context, previous: prior });
+    assert.equal(result.status, 'resolved', request);
+    assert.deepEqual([result.query.projects, result.query.models, result.query.contentAnalysis, result.query.period],
+      [prior.projects, prior.models, true, lastWeek], request);
+  }
 });
 
 test('content opt-in does not carry into an unrelated later request', () => {
