@@ -158,3 +158,14 @@ test('dated model IDs are normalized once for pricing, model filters, and groupi
     assert.equal(haiku.summary.apiEquivalentUsd, priceUsage('claude-haiku-4-5', usage()).usd);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+test('a dated model filter matches rows the same way as the rate-card ID', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rex-accounting-'));
+  try {
+    const project = join(root, 'projects', 'project-a');
+    mkdirSync(project, { recursive: true });
+    const dated = row('u1', 'req-1'); dated.message.model = 'claude-haiku-4-5-20251001';
+    writeRows(join(project, 'session-a.jsonl'), [dated, row('u2', 'req-2')]);
+    assert.equal(collectUsage({ root, models: ['claude-haiku-4-5-20251001'] }).summary.requests, 1);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

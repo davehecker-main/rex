@@ -113,6 +113,7 @@ export function collectUsage({ root = join(homedir(), '.claude'), from, to, proj
   const coverage = { files: 0, missingSource: 0, unreadableDirs: 0, unreadableFiles: 0, malformedLines: 0, assistantRows: 0, rowsWithoutUsage: 0, undatedRows: 0, duplicateRows: 0, unpricedRequests: 0, unpricedByReason: {} };
   const byId = new Map();
   const citedSessions = sessions ? new Set(sessions) : null;
+  const wantedModels = models?.length ? new Set(models.map(canonicalModel)) : null;
   const eventSeen = new Set();
   const eventRows = [];
   let discovered;
@@ -150,7 +151,7 @@ export function collectUsage({ root = join(homedir(), '.claude'), from, to, proj
       }
       if (row.type !== 'assistant') continue;
       const model = canonicalModel(row.message?.model);
-      if (models?.length && !models.includes(model)) continue;
+      if (wantedModels && !wantedModels.has(model)) continue;
       coverage.assistantRows++;
       if (!row.message?.usage) { coverage.rowsWithoutUsage++; continue; }
       const id = row.requestId ?? row.message.id ?? (row.uuid ? `${row.sessionId ?? basename(path)}:${row.uuid}` : `${path}:${i}`);
