@@ -129,8 +129,10 @@ export function resolveReportQuery(request, {
   if (!recognized && !/\bhow much did i use\b/i.test(text) && !(previous && followUp)) return clarification('What would you like Rex to report? Please name the subject or the report to refine.');
   const todayParts = localParts(new Date(now), timeZone);
   const today = `${todayParts.year}-${String(todayParts.month).padStart(2, '0')}-${String(todayParts.day).padStart(2, '0')}`;
-  const sourceRequest = /\b(?:sources?|inventory)\b|\b(?:every|all)\s+data\s+types?\s+(?:that\s+is\s+)?available\b/i.test(text);
-  const sinceInstalled = sourceRequest && /\bsince\s+(?:(?:you|rex)\s+(?:were|was)\s+)?installed\b/i.test(text);
+  const sourceRequest = /\b(?:sources?|inventory)\b|\b(?:every|all)\s+data\s+types?\s+(?:that\s+is\s+)?available\b|\bavailable\s+to\s+rex\b/i.test(text);
+  // "since installed" names the window on its own; it does not require source-inventory
+  // wording to also be present (a plain "report since you were installed" still means that).
+  const sinceInstalled = /\bsince\s+(?:(?:you|rex)\s+(?:were|was)\s+)?installed\b/i.test(text);
   const projectResult = detectProjects(text, projects, previous, sourceRequest);
   if (projectResult.question) return clarification(projectResult.question);
   const modelResult = detectModels(text, models, projects, previous);

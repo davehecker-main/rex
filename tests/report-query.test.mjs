@@ -161,3 +161,10 @@ test('worked-example request asks for discovered source inventory since installa
   assert.equal(resolved.query.period, null);
   assert.deepEqual(resolved.query.projects, []);
 });
+
+test('short form "report since you were installed" still recognizes the since-installed window without source wording', () => {
+  const resolved = resolveReportQuery('report since you were installed', context);
+  assert.equal(resolved.status, 'resolved');
+  assert.equal(resolved.query.history, 'since-installed');
+  assert.equal(resolved.query.period, null);
+});
