@@ -54,6 +54,47 @@ test('keeps Codex token convention apart from Claude and treats empty SQLite as 
   assert.equal('total' in report.providerTokens, false);
 });
 
+test('counts legacy Codex token_count records once and prefers canonical records for mixed sessions', () => {
+  const options = fixture();
+  const old = { type: 'session_meta', payload: { id: 'old-session' }, timestamp: '2026-09-21T09:00:00Z' };
+  const token = (ordinal, input, output, reasoning, totalInput) => ({
+    type: 'event_msg', ordinal, timestamp: '2026-09-21T10:00:00Z', payload: { type: 'token_count', info: {
+      last_token_usage: { input_tokens: input, output_tokens: output, reasoning_output_tokens: reasoning },
+      total_token_usage: { input_tokens: totalInput },
+    } },
+  });
+  const oldRows = [old, token(1, 10, 4, 2, 10), token(2, 10, 4, 2, 10), token(3, 20, 6, 3, 30)];
+  file(join(options.codexRoot, 'sessions', 'old.jsonl'), oldRows.map(JSON.stringify).join('\n'));
+  file(join(options.codexRoot, 'archived_sessions', 'old.jsonl'), oldRows.map(JSON.stringify).join('\n'));
+  file(join(options.codexRoot, 'sessions', 'mixed.jsonl'), [
+    { type: 'session_meta', payload: { id: 'new-session' }, timestamp: '2026-09-21T09:00:00Z' },
+    token(1, 100, 100, 100, 100),
+    { type: 'token_usage_record', timestamp: '2026-09-21T10:00:00Z', payload: {
+      session_id: 'new-session', response_id: 'r1', usage: { input_tokens: 7, output_tokens: 3, reasoning_output_tokens: 1 },
+    } },
+  ].map(JSON.stringify).join('\n'));
+  const report = collectSourceInventory(options);
+  assert.deepEqual(report.providerTokens.codex, { input: 37, output: 13, reasoningOutputSubset: 6 });
+});
+
+test('since-installed falls back to first installer commit and reports an unavailable milestone without stopping', () => {
+  const options = fixture();
+  mkdirSync(join(options.claudeRoot, 'commands'));
+  symlinkSync('/missing/rex.md', join(options.claudeRoot, 'commands', 'rex.md'));
+  options.from = 'since-installed';
+  options.command = (name) => name === 'git install history'
+    ? { status: 0, stdout: '2026-09-20T00:00:00Z\n' } : { status: 1, stdout: '' };
+  const report = collectSourceInventory(options);
+  assert.equal(report.window.from, '2026-09-20T00:00:00Z');
+  assert.equal(report.installMilestones.chosen.source, 'first installer commit');
+  assert.ok(report.installMilestones.missingCandidates.some((row) => row.status === 'dangling'));
+  options.command = () => ({ status: 1, stdout: '' });
+  const unavailable = collectSourceInventory(options);
+  assert.equal(unavailable.window.from, null);
+  assert.equal(unavailable.installMilestones.chosen, null);
+  assert.equal(source(unavailable, 'rex.install').coverage.status, 'missing');
+});
+
 test('lists candidate install milestones and labels live claims as a snapshot', () => {
   const options = fixture();
   file(join(options.rexRoot, 'scripts', 'install.sh'), '#!/bin/sh\n');

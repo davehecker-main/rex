@@ -8,28 +8,51 @@ const effortName = (value) => ['low', 'medium', 'high', 'xhigh', 'max', 'ultra']
 
 export function collectCodexTokens(root, from, to) {
   const tokens = { input: 0, output: 0, reasoningOutputSubset: 0 };
-  const seen = new Set(); let missingIds = 0; let files = 0;
+  const seen = new Set(); const canonicalSessions = new Set();
+  const canonical = []; const legacy = [];
+  let missingIds = 0; let files = 0;
   for (const dir of ['sessions', 'archived_sessions']) {
     for (const file of discover(join(root, dir), ['.jsonl']).files) {
       files++;
       let rows;
       try { rows = parseRecords(file).records; } catch { continue; }
+      const metadata = rows.find((row) => row.type === 'session_meta')?.payload;
+      const session = metadata?.session_id ?? metadata?.id ?? file;
       for (let i = 0; i < rows.length; i++) {
         const row = rows[i];
-        if (row.type !== 'token_usage_record' || !within(row.timestamp, from, to)) continue;
-        const payload = row.payload ?? {};
-        const id = payload.response_id && (payload.session_id || payload.thread_id)
-          ? `${payload.session_id ?? payload.thread_id}:${payload.response_id}` : null;
-        if (!id) missingIds++;
-        const key = id ?? `${file}:${i}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        const usage = payload.usage ?? {};
-        tokens.input += Number(usage.input_tokens) || 0;
-        tokens.output += Number(usage.output_tokens) || 0;
-        tokens.reasoningOutputSubset += Number(usage.reasoning_output_tokens) || 0;
+        if (!within(row.timestamp, from, to)) continue;
+        if (row.type === 'token_usage_record') {
+          const payload = row.payload ?? {};
+          const owner = payload.session_id ?? payload.thread_id ?? session;
+          canonicalSessions.add(owner);
+          const id = payload.response_id && owner !== file ? `${owner}:${payload.response_id}` : null;
+          if (!id) missingIds++;
+          canonical.push({ key: id ?? `${file}:${i}`, usage: payload.usage ?? {} });
+        } else if (row.type === 'event_msg' && row.payload?.type === 'token_count' && row.payload.info?.last_token_usage) {
+          const info = row.payload.info;
+          const stableSession = session !== file;
+          if (!stableSession) missingIds++;
+          const marker = info.total_token_usage ? JSON.stringify(info.total_token_usage) :
+            `${row.ordinal ?? row.timestamp}:${JSON.stringify(info.last_token_usage)}`;
+          legacy.push({ session, key: `${session}:${marker}`, usage: info.last_token_usage });
+        }
       }
     }
+  }
+  const add = (usage) => {
+    tokens.input += Number(usage.input_tokens) || 0;
+    tokens.output += Number(usage.output_tokens) || 0;
+    tokens.reasoningOutputSubset += Number(usage.reasoning_output_tokens) || 0;
+  };
+  for (const record of canonical) {
+    if (seen.has(record.key)) continue;
+    seen.add(record.key);
+    add(record.usage);
+  }
+  for (const record of legacy) {
+    if (canonicalSessions.has(record.session) || seen.has(record.key)) continue;
+    seen.add(record.key);
+    add(record.usage);
   }
   return { tokens: files ? tokens : null, coverage: { files, recordsWithoutDedupeId: missingIds } };
 }

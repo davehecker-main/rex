@@ -35,9 +35,9 @@ export function collectSourceInventory({
   else missingCandidates.push({ source: 'first installer commit', status: 'missing' });
   const chosen = candidates.find((row) => row.source === 'installed Claude command mtime') ??
     candidates.find((row) => row.source === 'installed Codex agent mtime') ??
-    candidates.find((row) => row.source === 'install.sh mtime') ?? null;
+    candidates.find((row) => row.source === 'install.sh mtime') ??
+    candidates.find((row) => row.source === 'first installer commit') ?? null;
   const effectiveFrom = from === 'since-installed' ? chosen?.at ?? null : from;
-  if (from === 'since-installed' && !effectiveFrom) throw new Error('no installed milestone available');
   const sources = [...claudeSources(claudeRoot, effectiveFrom, to), ...codexSources(codexRoot, effectiveFrom, to)];
   const projectKey = shareViewRoot.replaceAll(/[^a-zA-Z0-9]/g, '-');
   const memory = discover(join(claudeRoot, 'projects', projectKey, 'memory'));
@@ -70,5 +70,6 @@ export function collectSourceInventory({
     providerTokens: { claude: claude.facts.tokens ?? null, codex: codex.tokens },
     tokenCoverage: { codex: codex.coverage },
     installMilestones: { candidates, missingCandidates, chosen, limit: 'File mtimes can change on reinstall; choose explicitly for since-installed reporting.' },
-    unavailable: ['dollars actually paid', 'human attention', 'avoidable waiting', 'delegation speedup', 'Rex causal effect'] };
+    unavailable: [...(from === 'since-installed' && !chosen ? ['installation date; showing all available history'] : []),
+      'dollars actually paid', 'human attention', 'avoidable waiting', 'delegation speedup', 'Rex causal effect'] };
 }
