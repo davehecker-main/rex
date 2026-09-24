@@ -65,6 +65,53 @@ test('comparison is explicit and cannot turn an unknown full cost into a known d
   assert.match(renderReportHtml(view), /Comparison/);
 });
 
+const withCost = (usd) => { const report = sample(); report.summary = { ...report.summary, apiEquivalentUsd: usd }; return report; };
+
+test('a negative period cost delta renders as a signed dollar amount, not money()\'s bare-negative string', () => {
+  const view = buildReportView(withCost(3.10), { compareTo: withCost(15.40) });
+  assert.equal(view.comparison.apiEquivalentUsdDelta, -12.3);
+  for (const output of [renderReportHtml(view), renderReportTerminal(view)]) {
+    assert.match(output, /-\$12\.30/);
+    assert.doesNotMatch(output, /\$-12\.30/);
+  }
+});
+
+test('a positive period cost delta renders with an explicit plus sign', () => {
+  const view = buildReportView(withCost(15.40), { compareTo: withCost(12.30) });
+  for (const output of [renderReportHtml(view), renderReportTerminal(view)]) {
+    assert.match(output, /\+\$3\.10/);
+  }
+});
+
+function projectComparisonAssessment(currentUsd, baselineUsd) {
+  return {
+    health: { status: 'unknown', basis: 'Coverage incomplete.' },
+    timeSinks: { status: 'unknown', reason: 'Active time unmeasured.' },
+    contentAnalysis: { status: 'not-requested' }, semanticFindings: [], interventions: [],
+    comparisons: [{ dimension: 'project', labels: { current: 'ShareView', baseline: 'scripts' },
+      metrics: { requests: { current: 10, baseline: 20, delta: -10 },
+        apiEquivalentUsd: { current: currentUsd, baseline: baselineUsd, delta: currentUsd - baselineUsd } },
+      evidence: { currentSessions: ['session-a'], baselineSessions: ['session-b'] },
+      caveat: 'Session counts and usage are measured; no human work time or causal effect is inferred.' }],
+  };
+}
+
+test('a negative project comparison cost delta renders as a signed dollar amount in both views', () => {
+  const view = buildReportView(sample(), { assessment: projectComparisonAssessment(3.10, 15.40) });
+  assert.ok(view.projectComparison);
+  for (const output of [renderReportHtml(view), renderReportTerminal(view)]) {
+    assert.match(output, /-\$12\.30/);
+    assert.doesNotMatch(output, /\$-12\.30/);
+  }
+});
+
+test('a positive project comparison cost delta renders with an explicit plus sign in both views', () => {
+  const view = buildReportView(sample(), { assessment: projectComparisonAssessment(15.40, 12.30) });
+  for (const output of [renderReportHtml(view), renderReportTerminal(view)]) {
+    assert.match(output, /\+\$3\.10/);
+  }
+});
+
 test('intervention evidence shows values, supporting sessions, unknown reason, and noncausation caveat in both views', () => {
   const assessment = { health: { status: 'unknown', basis: 'Coverage incomplete.' },
     timeSinks: { status: 'unknown', reason: 'Active time unmeasured.' },
