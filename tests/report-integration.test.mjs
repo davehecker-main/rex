@@ -309,6 +309,8 @@ test('source request follows the report path and keeps provider conventions and 
     assert.match(html, /Snapshot/);
     assert.match(html, /Codex provider tokens/);
     assert.match(html, /Claude provider tokens/);
+    assert.match(html, /permissionRules/);
+    assert.match(html, /contextAttachments/);
     assert.match(html, /Missing/);
     assert.match(html, /Unavailable/);
     assert.doesNotMatch(html, /SECRET_GRANT_VALUE/);
@@ -336,6 +338,7 @@ test('prepared source evidence gives Rex the discovered source list and the repo
     const installed = join(claudeRoot, 'commands', 'rex.md');
     mkdirSync(join(claudeRoot, 'commands'), { recursive: true });
     writeFileSync(installed, 'installed');
+    writeFileSync(join(claudeRoot, 'settings.json'), '{"permissions":{"allow":["SECRET_GRANT_VALUE"]}}');
     const bin = join(root, 'bin');
     mkdirSync(bin);
     const codex = join(bin, 'codex');
@@ -357,6 +360,7 @@ test('prepared source evidence gives Rex the discovered source list and the repo
     const evidence = JSON.parse(readFileSync(evidencePath, 'utf8'));
     assert.ok(evidence.sourceInventory.sources.some((row) => row.id === 'claude.projects'));
     assert.ok(evidence.sourceInventory.sources.some((row) => row.id === 'codex.sessions'));
+    assert.doesNotMatch(JSON.stringify(evidence), /SECRET_GRANT_VALUE/);
     const command = spawnSync('sh', [join(process.cwd(), 'scripts', 'rex-report.sh'), request,
       '--root', claudeRoot, '--codex-root', join(root, 'codex'), '--rex-root', join(root, 'rex'),
       '--shareview-root', join(root, 'shareview')], { encoding: 'utf8', env });

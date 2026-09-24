@@ -36,6 +36,7 @@ PY
   printf 'Read the structured Rex report evidence at %s. Judge only the requested scope.\n' "$evidence"
   printf 'The contentSources path may be read only when query.contentAnalysis is true.\n'
   printf 'If contentAnalysis is false, do not read raw transcripts. Treat metric patterns as observations, not established habits.\n'
+  printf 'For a source-inventory request, use the discovered sourceInventory facts and coverage in the evidence file; return a bounded summary with an empty findings array because session finding references do not identify source rows.\n'
   printf 'Do not estimate human work time from session elapsed time or infer intervention causation.\n'
   printf 'Return ONLY one JSON object with {"summary": string, "findings": array}. Each finding needs label, status (metric-observation or established-behavior), sessions (known IDs), evidence (objects with session and reference), and caveat.\n'
   printf 'Use established-behavior only with explicit content opt-in and transcript message references. Use metric-observation for metrics-only evidence. If evidence does not support a diagnosis, return an empty findings array and explain uncertainty in summary. No markdown fences.\n'

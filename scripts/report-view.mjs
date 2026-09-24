@@ -127,22 +127,24 @@ function tokenRows(inventory) {
 
 const sourceRows = (source) => source.kind === 'event' ? source.coverage.rowsInWindow ?? 'unknown' :
   source.coverage.rows || source.coverage.files || 0;
+const sourceFacts = (source) => Object.entries(source.facts ?? {}).map(([key, value]) =>
+  `${key}: ${typeof value === 'object' && value !== null ? JSON.stringify(value) : String(value)}`).join('; ') || 'none';
 
 function inventoryTerminal(inventory) {
   const lines = ['Source inventory', `Selected range: ${inventory.window.from ?? 'first available'} to ${inventory.window.toExclusive ?? 'latest available'} (exclusive); requested ${inventory.window.requestedFrom ?? 'all available'}`,
     `Installation milestone: ${inventory.installMilestones.chosen ? `${inventory.installMilestones.chosen.source} at ${inventory.installMilestones.chosen.at}` : 'unavailable'}`,
     `Milestone limit: ${inventory.installMilestones.limit}`,
     ...tokenRows(inventory).map(([name, value]) => `${name}: ${value}`),
-    'Source | Type | Data held | Event rows / snapshot files or rows | Coverage | Limit'];
-  for (const source of inventory.sources) lines.push(`${source.id} | ${source.kind} | ${source.dataHeld} | ${sourceRows(source)} | ${source.coverage.status} (missing ${number(source.coverage.missing)}, dangling ${number(source.coverage.dangling)}, unreadable ${number(source.coverage.unreadable)}, unparseable ${number(source.coverage.unparseable)}) | ${source.limit}`);
+    'Source | Type | Data held | Event rows / snapshot files or rows | Facts | Coverage | Limit'];
+  for (const source of inventory.sources) lines.push(`${source.id} | ${source.kind} | ${source.dataHeld} | ${sourceRows(source)} | ${sourceFacts(source)} | ${source.coverage.status} (missing ${number(source.coverage.missing)}, dangling ${number(source.coverage.dangling)}, unreadable ${number(source.coverage.unreadable)}, unparseable ${number(source.coverage.unparseable)}) | ${source.limit}`);
   lines.push(`Unavailable: ${inventory.unavailable.join(', ')}`);
   return lines;
 }
 
 function inventoryHtml(inventory) {
-  const rows = inventory.sources.map((source) => `<tr><td>${escapeHtml(source.id)}</td><td>${escapeHtml(source.kind === 'event' ? 'Event' : 'Snapshot')}</td><td>${escapeHtml(source.dataHeld)}</td><td>${escapeHtml(sourceRows(source))}</td><td>${escapeHtml(`${source.coverage.status}; files ${source.coverage.files}; missing ${source.coverage.missing}; dangling ${source.coverage.dangling}; unreadable ${source.coverage.unreadable}; unparseable ${source.coverage.unparseable}`)}</td><td>${escapeHtml(source.limit)}</td></tr>`).join('');
+  const rows = inventory.sources.map((source) => `<tr><td>${escapeHtml(source.id)}</td><td>${escapeHtml(source.kind === 'event' ? 'Event' : 'Snapshot')}</td><td>${escapeHtml(source.dataHeld)}</td><td>${escapeHtml(sourceRows(source))}</td><td>${escapeHtml(sourceFacts(source))}</td><td>${escapeHtml(`${source.coverage.status}; files ${source.coverage.files}; missing ${source.coverage.missing}; dangling ${source.coverage.dangling}; unreadable ${source.coverage.unreadable}; unparseable ${source.coverage.unparseable}`)}</td><td>${escapeHtml(source.limit)}</td></tr>`).join('');
   const milestone = inventory.installMilestones.chosen;
-  return `<section><h2>Source inventory</h2><p>Selected range: ${escapeHtml(inventory.window.from ?? 'first available')} to ${escapeHtml(inventory.window.toExclusive ?? 'latest available')} (exclusive); requested ${escapeHtml(inventory.window.requestedFrom ?? 'all available')}.</p><p>Installation milestone: ${milestone ? `${escapeHtml(milestone.source)} at ${escapeHtml(milestone.at)}` : 'unavailable'}. ${escapeHtml(inventory.installMilestones.limit)}</p><p>Candidate milestones: ${escapeHtml(inventory.installMilestones.candidates.map((row) => `${row.source} ${row.at}`).join('; ') || 'none')}.</p><table><thead><tr><th>Provider</th><th>Token convention</th></tr></thead><tbody>${tokenRows(inventory).map(([name, value]) => `<tr><td>${escapeHtml(name)}</td><td>${escapeHtml(value)}</td></tr>`).join('')}</tbody></table><div class="scroll"><table><thead><tr><th>Source</th><th>Type</th><th>Data held</th><th>Event rows / snapshot files or rows</th><th>Coverage (Missing, dangling, unreadable, unparseable)</th><th>Limit</th></tr></thead><tbody>${rows}</tbody></table></div><p>Unavailable: ${escapeHtml(inventory.unavailable.join(', '))}.</p></section>`;
+  return `<section><h2>Source inventory</h2><p>Selected range: ${escapeHtml(inventory.window.from ?? 'first available')} to ${escapeHtml(inventory.window.toExclusive ?? 'latest available')} (exclusive); requested ${escapeHtml(inventory.window.requestedFrom ?? 'all available')}.</p><p>Installation milestone: ${milestone ? `${escapeHtml(milestone.source)} at ${escapeHtml(milestone.at)}` : 'unavailable'}. ${escapeHtml(inventory.installMilestones.limit)}</p><p>Candidate milestones: ${escapeHtml(inventory.installMilestones.candidates.map((row) => `${row.source} ${row.at}`).join('; ') || 'none')}.</p><table><thead><tr><th>Provider</th><th>Token convention</th></tr></thead><tbody>${tokenRows(inventory).map(([name, value]) => `<tr><td>${escapeHtml(name)}</td><td>${escapeHtml(value)}</td></tr>`).join('')}</tbody></table><div class="scroll"><table><thead><tr><th>Source</th><th>Type</th><th>Data held</th><th>Event rows / snapshot files or rows</th><th>Facts</th><th>Coverage (Missing, dangling, unreadable, unparseable)</th><th>Limit</th></tr></thead><tbody>${rows}</tbody></table></div><p>Unavailable: ${escapeHtml(inventory.unavailable.join(', '))}.</p></section>`;
 }
 
 function table(section) {

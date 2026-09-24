@@ -55,6 +55,7 @@ async function main() {
   if (prepareFile) {
     const evidence = { request, query: result.query, report: result.report,
       baseline: result.baseline, assessment: result.assessment,
+      sourceInventory: result.view.sourceInventory,
       contentSources: result.query.contentAnalysis ? join(root, 'projects') : null };
     writeFileSync(prepareFile, JSON.stringify(evidence), { mode: 0o600 });
     process.stdout.write(`Prepared Rex evidence: ${prepareFile}\n`);
