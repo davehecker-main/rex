@@ -43,7 +43,7 @@ That installs the Codex agent into `~/.codex/agents/` and the Claude slash comma
 CODEX_HOME=/path/to/.codex CLAUDE_HOME=/path/to/.claude ./scripts/install.sh
 ```
 
-The two scripts stay in this repo and run from here. They need Node 18+ and no dependencies.
+The scripts stay in this repo and run from here. They need Node 18+ and no dependencies.
 
 ## Files
 
@@ -58,6 +58,16 @@ scripts/
   session-digest.mjs    session transcript -> metrics-only digest
   rex-consult.sh        build the prompt and call codex exec
   log-intervention.mjs  append one row to Rex's memory
+  usage-accounting.mjs  local transcript usage and pricing
+  report-query.mjs      natural-language query and follow-up context
+  report-assessment.mjs evidence-bound comparisons and findings
+  report-content.mjs    explicit opt-in repeated-question scan
+  report-view.mjs       shared browser and terminal report model
+  report-browser.mjs    browser delivery and terminal fallback
+  report-runner.mjs     on-demand report orchestration
+  rex-report.mjs        command-line report entry point
+  rex-report.sh         report flow with read-only Rex judgment
+  rex-report-judge.sh   evidence prompt and Codex invocation
 ```
 
 There is no `claude/agents/rex.md`, deliberately. Rex is not a subagent of the model he
@@ -76,6 +86,30 @@ scripts/rex-consult.sh /tmp/rex-digest.md "why did that take two hours?"
 node scripts/log-intervention.mjs --session <id> \
   --finding "..." --advice "..." --acted yes
 ```
+
+For a cross-session report, give Rex a natural-language request:
+
+```sh
+node scripts/rex-report.mjs "Show all my usage across every project for the last month"
+node scripts/rex-report.mjs "only ShareView"
+node scripts/rex-report.mjs "show the sessions behind that finding"
+```
+
+The on-demand runner opens a private browser report. Its context file carries follow-up
+scope; `--context <path>` can select a separate conversation. If an integrated terminal
+report UI is unavailable, an explicit terminal request opens the browser and says why.
+The report contains measured totals, a priced lower bound when the full cost is unknown,
+the supported source and coverage gaps, comparisons, measured behavior signals and
+intervention follow-through. Daily groups use UTC; relative calendar dates use the local
+timezone shown in the report. An explicit request for transcript content analysis opts in
+to that mode; without supplied attributable evidence it reports insufficient evidence,
+and ordinary reports contain no transcript text. The runner does not infer actual billed
+spending from API-equivalent rates or human work time from session elapsed time.
+For behavior, comparison, and intervention requests through `/rex`, the installed command
+uses `scripts/rex-report.sh` to prepare a private structured evidence file, consult Rex via
+read-only Codex, validate his cited sessions, and then deliver the browser report. If the
+Codex call is unavailable, the measured report still opens and says judgment was unavailable.
+The direct Node command above delivers deterministic metrics without a model consult.
 
 `codex exec` has no `--agent` flag and does not read `~/.codex/agents/`, so `rex-consult.sh`
 extracts the persona from `rex.toml` and puts it in the prompt. The installed `rex.toml` is
@@ -136,8 +170,7 @@ Token totals are deduplicated by API request ID. `apiEquivalentUsd` applies the 
 first-party Claude API rate snapshot listed in the report; it is not a Claude subscription
 charge or an invoice. If pricing or source coverage is incomplete, that total is `null`
 and `knownApiEquivalentUsd` is only the priced lower bound. The `coverage` field states
-what was missing. This command is the accounting base for a later natural-language report;
-it does not yet answer questions or render an interactive report.
+what was missing. The browser report builds on this accounting data.
 
 ## The intervention log
 
@@ -147,6 +180,10 @@ memory. One row per consult records what he found, what he advised, and whether 
 acted on; a separate row records each decision.
 
 A finding can carry `habit`, a stable lowercase slug Rex reuses for the same behavior.
+It can also carry `--metric interruptionsPer100HumanTurns` when that measurable rate is the
+finding's actual basis; later intervention reports can compare it before and after while
+keeping causation unknown. Older rows without a metric remain valid and yield unknown later
+evidence.
 Older rows without it remain readable but do not count as sightings. On a second keyed
 sighting without a decision, Rex asks Dave once whether to make a stated one-line rule or
 drop the habit; the caller logs that exact question as `advice`. An unanswered question is
@@ -176,8 +213,8 @@ an MCP integration with issue-filing rights and its own GitHub identity. Neither
 The wrapper accumulated more machinery than judgment, and its telemetry recorded Rex's own
 runtime rather than anything about the engineer's attention.
 
-This version is a definition, not a system: two files to install, two scripts with no
-dependencies, and nothing running between consults. The earlier tree is tagged `v2-archive`.
+This version remains on demand, with no service running between consults or reports. The
+scripts have no runtime dependencies. The earlier tree is tagged `v2-archive`.
 
 ## Issues
 

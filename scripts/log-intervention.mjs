@@ -36,6 +36,11 @@ const finding = arg("finding");
 const habit = arg("habit");
 const decision = arg("decision");
 const rule = arg("rule");
+const metric = arg("metric");
+if (metric !== undefined && metric !== "interruptionsPer100HumanTurns") {
+  console.error("--metric currently supports interruptionsPer100HumanTurns only");
+  process.exit(2);
+}
 if (decision !== undefined && !["rule", "drop"].includes(decision)) {
   console.error(`--decision must be rule or drop (got "${decision}")`);
   process.exit(2);
@@ -48,13 +53,17 @@ if (decision && (!habit || finding || (decision === "drop" && rule))) {
   console.error("a decision requires --habit, no --finding, and --rule only with rule");
   process.exit(2);
 }
+if (metric && (decision || finding === "none")) {
+  console.error("--metric belongs on a finding, not a decision");
+  process.exit(2);
+}
 if (rule && !decision) {
   console.error("--rule requires --decision rule");
   process.exit(2);
 }
 if (!finding && !decision) {
   console.error(
-    'usage: log-intervention.mjs --session <id> --finding "<diagnosis>" [--habit <slug>] --advice "<correction>" --acted <yes|no|partial>\n' +
+      'usage: log-intervention.mjs --session <id> --finding "<diagnosis>" [--habit <slug>] [--metric interruptionsPer100HumanTurns] --advice "<correction>" --acted <yes|no|partial>\n' +
       '       log-intervention.mjs --habit <slug> --decision rule|drop [--rule "<text or location>"]\n' +
       "       log-intervention.mjs --list",
   );
@@ -78,6 +87,7 @@ const row = {
 if (habit && (decision || finding !== "none")) row.habit = habit;
 if (decision) row.decision = decision;
 if (rule) row.rule = rule;
+if (metric && finding !== "none") row.metric = metric;
 
 mkdirSync(dirname(LOG), { recursive: true });
 appendFileSync(LOG, `${JSON.stringify(row)}\n`);

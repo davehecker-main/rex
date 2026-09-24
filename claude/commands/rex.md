@@ -4,12 +4,57 @@ description: Consult Rex, the therapist for how this session is working, running
 
 # /rex
 
-Consult Rex on how this session is *working* — not on whether the code is right. With an
-argument, aim him at it: `/rex why did this take so long?`. With none, hand him the current
-session's digest and let him find the habit.
+Use `/rex` for either a session consult or an on-demand report. A report request asks for
+usage, cost, history, comparisons, behavior patterns, interventions, or a report follow-up.
+Pass the user's natural-language request verbatim to the report runner. A consult asks how
+the current session is *working*: `/rex why did this take so long?`. With no argument,
+prepare the current-session digest and consult him.
 
 `codex/agents/rex.toml` owns his judgment and output format. This file owns how he is
 reached, what goes on the wire, and how the answer comes back.
+
+## Report requests and follow-ups
+
+For a report request, write the user's exact words to a private temporary request file using
+the host's file-writing tool, then run `scripts/rex-report.sh <path>`.
+Do not interpolate the request into shell code. The runner remembers the last report's query
+in a private context file, so follow-ups such as “only ShareView,” “compare that with the
+previous month,” and “show the sessions behind that finding” retain scope.
+
+The command prepares private structured evidence. For behavior, comparison, and intervention
+requests, it asks Rex through read-only `codex exec` to judge that evidence and validates
+his session references before adding the judgment to the report. If the host cannot launch
+Codex, it delivers the measured report and clearly says judgment was unavailable. The
+prepared evidence never includes raw transcript text; an explicit content-analysis request
+allows Rex to read selected local transcript sources. The command opens a private HTML
+report in the browser. A terminal preference falls back to
+the browser because this host does not expose an integrated terminal report UI. Relay only
+the report URL or launch confirmation and any limitation printed by the runner; do not paste
+the full report into chat. If the runner asks for clarification, ask the user that question
+and then pass the answer with the prior context. Do not silently replace an unsupported
+request with a narrower usage query.
+
+The built-in resolver handles common time and follow-up language. For other clear phrasing,
+you may resolve the user's words into a structured query JSON file and pass
+`--query-file <path>` alongside `--request-file` when invoking the underlying Node runner.
+The fields are `kind` (`usage`,
+`behavior`, `comparison`, `intervention`, `sessions`), `period` and `comparePeriod` as
+inclusive ISO `from` and exclusive ISO `to`, `projects` as available encoded directory
+keys, `models` as exact model IDs, `surface` (`browser` or `terminal`), and optional
+`currentSession`, `findingId`, `contentAnalysis`, and `timeZone`. Omit filters the user did
+not ask for. The runner validates source keys and requires explicit content opt-in in the
+verbatim request. Show the interpreted scope in the report and ask only when a material
+ambiguity remains. Never silently narrow a broad request to the subset the resolver knows.
+
+The report shows source and coverage, UTC daily buckets and the calendar timezone used to
+resolve relative dates, metered request totals, token and API-equivalent cost assumptions,
+unknown values, comparisons, findings, and supporting sessions. It never presents API
+equivalent estimates as actual spending. Content analysis needs an explicit request; the
+ordinary path reads metrics and does not expose transcript text. If no supported semantic
+evidence is available, the report says so.
+
+The report runner may write report artifacts and its context file. It does not change any
+source project. The ordinary consult path below remains read-only.
 
 ## Rex runs on Codex, and that is the point
 
@@ -122,6 +167,10 @@ Omit `--habit` when Rex names none. Log healthy verdicts with `--finding none` a
 habit. A finding the caller declines is likewise logged as `none`, so it cannot become a
 sighting. For a question, keep
 Rex's exact wording in `--advice`; that row lets him repeat it verbatim if unanswered.
+For a finding specifically measured by interruptions per 100 human turns, add
+`--metric interruptionsPer100HumanTurns`; this lets a later report compare periods. Do not
+attach that metric to a different habit or infer that a before/after change was caused by
+the intervention.
 
 When Dave answers yes or no, the calling session appends a separate decision row:
 
