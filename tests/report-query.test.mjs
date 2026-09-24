@@ -257,3 +257,17 @@ test('a drill-down keeps the earlier report period and content opt-in unless it 
   assert.deepEqual(narrowed.period, resolveReportQuery('Show usage this week', context).query.period);
   assert.equal(narrowed.contentAnalysis, false);
 });
+
+test('breadth wording wins over incidental project names', () => {
+  const projects = [...context.projects, { name: 'claude', key: '-Users-david-claude' }];
+  assert.deepEqual(resolveReportQuery('Show all my Claude usage across every project', { ...context, projects }).query.projects, []);
+  assert.deepEqual(resolveReportQuery('Show all my usage for ShareView', { ...context, projects }).query.projects, ['-Users-david-Developer-ShareView']);
+});
+
+test('content opt-in carries forward only on an explicit back-reference, never a bare "that"', () => {
+  const opted = resolveReportQuery('Analyze the session content for this week', context).query;
+  assert.equal(resolveReportQuery('Show my usage across all projects that I touched this week', { ...context, previous: opted }).query.contentAnalysis, false);
+  for (const request of ['Show the same for last week', 'How did that compare to last month?', 'What did that cost last week?', 'open that report in the browser']) {
+    assert.equal(resolveReportQuery(request, { ...context, previous: opted }).query.contentAnalysis, true, request);
+  }
+});

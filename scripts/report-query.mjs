@@ -87,14 +87,20 @@ export const projectName = (key) => projectParent(key).split('-').filter(Boolean
 
 function detectProjects(text, projects, previous, sourceRequest = false) {
   text = text.replace(/\bfinding\s+(?:rex|metric|content)-[a-z0-9-]+\b/gi, ' ');
+  // With breadth wording, a name counts only as the explicit object ("for ShareView").
+  const broad = allProjects.test(text) || allScope.test(text);
   const matches = projects.filter(({ name, key }) => {
     if (notProjectName.test(name)) name = key;
     if (/^rex$/i.test(name) && (sourceRequest || /\bRex\s+recommended\b/i.test(text)) &&
       !/\b(?:only|in|from)\s+Rex\b|\bRex\s+project\b/i.test(text)) return false;
-    return [name, key].some((label) => new RegExp(`(^|[^\\w])${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^\\w]|$)`, 'i').test(text));
+    return [name, key].some((label) => {
+      const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return new RegExp(broad ? `\\b(?:only|for|in|from)\\s+${escaped}([^\\w]|$)|(^|[^\\w])${escaped}\\s+project\\b`
+        : `(^|[^\\w])${escaped}([^\\w]|$)`, 'i').test(text);
+    });
   });
   if (matches.length) return { value: matches.map(({ key }) => key) };
-  if (allProjects.test(text) || allScope.test(text)) return { value: [] };
+  if (broad) return { value: [] };
   const named = text.match(/\b(?:only|for|in)\s+([A-Z][\w-]+)\b/);
   if (named && !/^(?:all|every|last|this|usage|tokens|cost|the|my|browser)$/i.test(named[1])) {
     return { question: `Which project did you mean by “${named[1]}”?` };
@@ -152,7 +158,7 @@ export function resolveReportQuery(request, {
   const selected = calendarPeriod(text, today, timeZone);
   // Content opt-in and a drill-down kind carry forward only when the request refers back to the
   // previous report ("that", "the same", "only…", "open this"), or is itself a drill-down.
-  const refersBack = drillDown || /^\s*(?:(?:and|now|then)\s+)?only\b|\b(?:that|the same|this report)\b|\b(?:open|show|compare|filter|narrow)\s+(?:it|this(?!\s+(?:week|month|year|session)))\b/i.test(text);
+  const refersBack = drillDown || /^\s*(?:(?:and|now|then)\s+)?only\b|\bthe same\b|\b(?:that|this) report\b|\bhow did (?:that|it) compare\b|\bwhat did (?:that|it) cost\b|\b(?:compare|open|show)\s+(?:that|it|this(?!\s+(?:week|month|year|session)))\b/i.test(text);
   // A drill-down re-shows the earlier report's finding, so it keeps that report's scope as-is.
   const projectResult = drillDown ? { value: previous?.projects ?? [] } :
     detectProjects(text, projects, previous, sourceRequest);
