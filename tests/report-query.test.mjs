@@ -168,3 +168,45 @@ test('short form "report since you were installed" still recognizes the since-in
   assert.equal(resolved.query.history, 'since-installed');
   assert.equal(resolved.query.period, null);
 });
+
+test('a request that states its own scope replaces an inherited project, model, and period', () => {
+  const prior = resolveReportQuery('Compare ShareView this week with last week for opus 5 tokens and cost.', context).query;
+  for (const request of ['Show all my usage across every project for the last month.',
+    'Show all my usage across all projects for the last month.', 'Show my usage for the last month.']) {
+    const result = resolveReportQuery(request, { ...context, previous: prior });
+    assert.deepEqual(result.query.projects, [], request);
+    assert.deepEqual(result.query.models, [], request);
+    assert.equal(result.query.comparePeriod, null, request);
+  }
+  const history = resolveReportQuery('Review all available history and tell me which habits keep wasting time.', { ...context, previous: prior });
+  assert.deepEqual(history.query.projects, []);
+  assert.equal(history.query.period, null);
+  const intervention = resolveReportQuery('Did the changes Rex recommended last month help?', { ...context, previous: prior });
+  assert.deepEqual(intervention.query.projects, []);
+  assert.deepEqual(resolveReportQuery('Show all my usage.', { ...context, previous: prior }).query.projects, []);
+  assert.deepEqual(resolveReportQuery('only ShareView', { ...context, previous: prior }).query.period, prior.period);
+});
+
+test('content opt-in does not carry into an unrelated later request', () => {
+  const opted = resolveReportQuery('Analyze the session content for this week', context).query;
+  assert.equal(opted.contentAnalysis, true);
+  assert.equal(resolveReportQuery('Show my usage across all projects for this week.', { ...context, previous: opted }).query.contentAnalysis, false);
+  assert.equal(resolveReportQuery('Show my usage', { ...context, previous: opted }).query.contentAnalysis, false);
+  assert.equal(resolveReportQuery('open this in the browser', { ...context, previous: opted }).query.contentAnalysis, true);
+});
+
+test('drill-down keeps the prior scope and never matches project names against common words or finding IDs', () => {
+  const projects = [...context.projects, { name: 'sessions', key: '-private-tmp-guard-live-two-sessions' },
+    { name: '1', key: '-private-tmp-handoff-issue-1' }, { name: 'evidence', key: '-private-tmp-evidence' }];
+  const prior = { ...resolveReportQuery('Show ShareView usage this week', { ...context, projects }).query,
+    findingId: null, findingIds: ['rex-1', 'metric-toolCalls'] };
+  for (const request of ['show the sessions behind finding rex-1', 'show the evidence behind finding rex-1']) {
+    const result = resolveReportQuery(request, { ...context, projects, previous: prior });
+    assert.equal(result.status, 'resolved', request);
+    assert.equal(result.query.kind, 'sessions');
+    assert.deepEqual(result.query.projects, prior.projects, request);
+  }
+  const single = resolveReportQuery('show the sessions behind that finding', { ...context, projects, previous: { ...prior, findingId: 'rex-1' } });
+  assert.deepEqual(single.query.projects, prior.projects);
+  assert.deepEqual(resolveReportQuery('Show usage for my sessions this week', { ...context, projects }).query.projects, []);
+});

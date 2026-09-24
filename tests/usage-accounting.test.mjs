@@ -141,3 +141,9 @@ test('dates API-equivalent rates and never presents an unknown model as actual s
   assert.equal(priceUsage('unknown-model', usage()).usd, null);
   assert.equal(priceUsage('claude-opus-5', usage(), { speed: 'fast' }).usd, null);
 });
+
+test('dated model IDs resolve to their rate-card entry; unknown models stay unknown', () => {
+  assert.deepEqual(priceUsage('claude-haiku-4-5-20251001', usage()), priceUsage('claude-haiku-4-5', usage()));
+  assert.equal(priceUsage('claude-haiku-4-5-20251001', usage()).status, 'priced');
+  assert.equal(priceUsage('claude-unknown-20251001', usage()).status, 'unknown-model');
+});

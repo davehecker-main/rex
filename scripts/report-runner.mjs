@@ -13,9 +13,12 @@ export function discoverProjects(root) {
   let entries;
   try { entries = readdirSync(join(root, 'projects'), { withFileTypes: true }); }
   catch (error) { if (error.code === 'ENOENT') return []; throw error; }
-  return entries.filter((entry) => entry.isDirectory()).map((entry) => ({
-    key: entry.name, name: entry.name.split('-').filter(Boolean).at(-1) ?? entry.name,
-  }));
+  // A worktree dir (<project>--claude-worktrees-<name>, <project>-worktrees-<name>) takes its
+  // parent project's name, so naming the project selects its worktree transcripts too.
+  return entries.filter((entry) => entry.isDirectory()).map((entry) => {
+    const parent = entry.name.replace(/(?:--claude)?-worktrees-.+$/, '');
+    return { key: entry.name, name: parent.split('-').filter(Boolean).at(-1) ?? entry.name };
+  });
 }
 
 function interventions(path) {
@@ -123,6 +126,12 @@ export function runReportRequest(request, {
       now, timeZone, projects, models: Object.keys(rateCard.models) });
   if (queryResult.status !== 'resolved') return queryResult;
   const query = queryResult.query;
+  // A drill-down shows the sessions the earlier report cited, as recorded in its context,
+  // rather than re-deriving findings from a report whose scope may differ.
+  const cited = query.kind === 'sessions' ? previous?.findings?.find((entry) => entry.id === query.findingId) : null;
+  if (query.kind === 'sessions' && !cited) {
+    return { status: 'clarification', question: `I cannot find ${query.findingId ?? 'that finding'} in the earlier report. Which finding ID should I use?` };
+  }
   if (query.currentSession && !process.env.CLAUDE_CODE_SESSION_ID) {
     return { status: 'clarification', question: 'Which session should I report? The host did not provide a current Claude session ID.' };
   }
@@ -133,7 +142,7 @@ export function runReportRequest(request, {
   }) : null;
   const options = { root, from: sourceInventory?.window.from ?? query.period?.from, to: query.period?.to,
     projects: query.projects, models: query.models,
-    session: query.currentSession ? process.env.CLAUDE_CODE_SESSION_ID : undefined };
+    session: query.currentSession ? process.env.CLAUDE_CODE_SESSION_ID : undefined, sessions: cited?.sessions };
   let report = collectUsage(options);
   let baseline = query.comparePeriod ? collectUsage({ ...options,
     from: query.comparePeriod.from, to: query.comparePeriod.to }) : null;
@@ -154,18 +163,16 @@ export function runReportRequest(request, {
     projectComparison: query.kind === 'comparison' && query.projects.length === 2 ? query.projects : undefined,
     interventions: logged,
     contentAnalysis: query.contentAnalysis, semanticEvidence: contentEvidence });
-  const effectiveJudgment = judgment ?? (query.kind === 'sessions' ? previous?.judgment : null);
-  if (effectiveJudgment) {
+  if (judgment) {
     const references = query.contentAnalysis ? collectContentReferences({ root, from: options.from,
       to: options.to, projects: query.projects, session: options.session }) : new Set();
-    assessment.rexJudgment = validateJudgment(effectiveJudgment, report, query.contentAnalysis, references);
+    assessment.rexJudgment = validateJudgment(judgment, report, query.contentAnalysis, references);
     if (assessment.rexJudgment.findings.some((item) => item.status === 'established-behavior')) {
       assessment.contentAnalysis.status = 'supported';
     }
   }
-  const reportFindings = findings(report, assessment);
-  const selectedFinding = query.kind === 'sessions'
-    ? reportFindings.find((entry) => entry.id === query.findingId) : null;
+  const reportFindings = cited ? [cited] : findings(report, assessment);
+  const selectedFinding = cited;
   const view = buildReportView(report, { compareTo: baseline, assessment,
     query, projectNames: projects, findings: reportFindings, finding: selectedFinding,
     sourceInventory });
@@ -173,6 +180,6 @@ export function runReportRequest(request, {
     terminalSupported, outputDir, openBrowser, writeTerminal }) : null;
   const context = { query: { ...query, findingIds: reportFindings.map((entry) => entry.id),
     findingId: reportFindings.length === 1 ? reportFindings[0].id : query.kind === 'sessions' ? query.findingId : null },
-    reportPath: delivery?.path ?? null, judgment: assessment.rexJudgment ?? null };
+    findings: reportFindings, reportPath: delivery?.path ?? null, judgment: assessment.rexJudgment ?? null };
   return { status: deliver ? 'delivered' : 'prepared', query, report, baseline, assessment, view, delivery, context };
 }

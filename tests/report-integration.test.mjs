@@ -371,3 +371,32 @@ test('prepared source evidence gives Rex the discovered source list and the repo
     assert.equal(context.judgment.summary, 'Rex interpreted source coverage');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+test('a named project includes its worktree dirs and drill-down shows exactly the cited sessions', () => {
+  const base = mkdtempSync(join(tmpdir(), 'rex-drill-'));
+  try {
+    const claude = join(base, 'claude');
+    for (const [project, session] of [['-Users-david-Developer-ShareView', 'session-a'],
+      ['-Users-david-Developer-ShareView--claude-worktrees-wt1', 'session-w'],
+      ['-private-tmp-guard-live-two-sessions', 'session-s'], ['-private-tmp-handoff-issue-1', 'session-1'],
+      ['-Users-david-Developer-Rex', 'session-b']]) {
+      mkdirSync(join(claude, 'projects', project), { recursive: true });
+      writeFileSync(join(claude, 'projects', project, `${session}.jsonl`), JSON.stringify(priceable(`req-${session}`, session)));
+    }
+    mkdirSync(join(base, 'output'));
+    const options = { root: claude, outputDir: join(base, 'output'), now: '2026-09-23T18:00:00Z',
+      timeZone: 'America/Los_Angeles', openBrowser: () => {} };
+    const scoped = runReportRequest('Review ShareView habits this week', { ...options, judgment: { summary: 'One worktree session stands out',
+      findings: [{ label: 'Worktree churn', status: 'metric-observation', sessions: ['session-w'],
+        evidence: [{ session: 'session-w', reference: 'metric:toolCalls' }], caveat: 'Metrics only.' }] } });
+    assert.equal(scoped.view.summary.requests, 2);
+    assert.deepEqual(scoped.view.scope.projects, ['ShareView']);
+    const previous = JSON.parse(JSON.stringify(scoped.context));
+    for (const request of ['show the sessions behind finding rex-1', 'show the evidence behind finding rex-1']) {
+      const drill = runReportRequest(request, { ...options, previous });
+      assert.equal(drill.status, 'delivered', request);
+      assert.deepEqual(drill.view.finding.sessions, ['session-w']);
+      assert.deepEqual(drill.view.sections.find((section) => section.id === 'session').rows.map((row) => row.key), ['session-w']);
+    }
+  } finally { rmSync(base, { recursive: true, force: true }); }
+});

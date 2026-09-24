@@ -33,7 +33,7 @@ export function buildReportView(report, { compareTo, assessment, query, projectN
     scope: { source: basis.source, from: basis.from, toExclusive: basis.toExclusive,
       timezone: 'UTC', calendarTimeZone: query?.timeZone ?? 'UTC',
       sessions: sections[3].rows.length, files: coverage.files ?? 0,
-      projects: query?.projects?.map((key) => projectNames.find((item) => item.key === key)?.name ?? key) ?? [],
+      projects: [...new Set(query?.projects?.map((key) => projectNames.find((item) => item.key === key)?.name ?? key) ?? [])],
       models: query?.models ?? [], history: query?.history ?? 'all-available',
       interventionPeriod: query?.kind === 'intervention' ? query.period : null,
       behaviorMeaning: basis.behaviorMeaning ?? null },

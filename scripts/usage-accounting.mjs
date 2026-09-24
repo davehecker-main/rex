@@ -31,7 +31,8 @@ const tokenFields = [...pricedFields, 'cacheWriteUnknown'];
 const emptyTokens = () => Object.fromEntries(tokenFields.map((key) => [key, 0]));
 
 export function priceUsage(model, usage, context = {}) {
-  const rates = RATE_CARD.models[model];
+  // Dated snapshot IDs (claude-haiku-4-5-20251001) share their undated entry's rates.
+  const rates = RATE_CARD.models[model] ?? RATE_CARD.models[String(model).replace(/-\d{8}$/, '')];
   if (!rates) return { status: 'unknown-model', usd: null };
   if (context.speed && context.speed !== 'standard') return { status: 'unknown-speed', usd: null };
   if (context.inference_geo && !['not_available', 'global'].includes(context.inference_geo)) {
@@ -98,7 +99,7 @@ function group(requests, key) {
   return [...map.values()].sort((a, b) => String(a.key).localeCompare(String(b.key)));
 }
 
-export function collectUsage({ root = join(homedir(), '.claude'), from, to, project, projects, models, session } = {}) {
+export function collectUsage({ root = join(homedir(), '.claude'), from, to, project, projects, models, session, sessions } = {}) {
   const start = from ? time(from) : null;
   const end = to ? time(to) : null;
   if (from && start === null) throw new Error(`invalid from date: ${from}`);
@@ -128,7 +129,8 @@ export function collectUsage({ root = join(homedir(), '.claude'), from, to, proj
       let row;
       try { row = JSON.parse(lines[i]); }
       catch { coverage.malformedLines++; continue; }
-      if (session && (row.sessionId ?? rel[1]?.replace(/\.jsonl$/, '')) !== session) continue;
+      const rowSession = row.sessionId ?? rel[1]?.replace(/\.jsonl$/, '');
+      if ((session && rowSession !== session) || (sessions && !sessions.includes(rowSession))) continue;
       const at = time(row.timestamp);
       if (at === null) { if (row.type === 'assistant' || row.type === 'user') coverage.undatedRows++; continue; }
       if ((start !== null && at < start) || (end !== null && at >= end)) continue;

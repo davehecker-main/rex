@@ -98,7 +98,9 @@ node scripts/rex-report.mjs "Show Rex source inventory since installed"
 ```
 
 The on-demand runner opens a private browser report. Its context file carries follow-up
-scope; `--context <path>` can select a separate conversation. If an integrated terminal
+scope; `--context <path>` can select a separate conversation. A request that states its own range or
+breadth ("across every project", "last month") starts a fresh scope, and content opt-in
+carries only into follow-ups that refer back to that report. If an integrated terminal
 report UI is unavailable, an explicit terminal request opens the browser and says why.
 The report contains measured totals, a priced lower bound when the full cost is unknown,
 the supported source and coverage gaps, comparisons, measured behavior signals and
