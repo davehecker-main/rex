@@ -17,6 +17,10 @@ reached, what goes on the wire, and how the answer comes back.
 
 For a report request, write the user's exact words to a private temporary request file using
 the host's file-writing tool, then run `scripts/rex-report.sh <path>`.
+Requests such as “Show Rex source inventory since installed” use that same path. If Claude
+initiates a report without a user request, set `REX_REPORT_CALLER=claude` for the command;
+the judge prompt then identifies Claude as the caller. User requests use the default user
+header and keep the user's words verbatim.
 Do not interpolate the request into shell code. The runner remembers the last report's query
 in a private context file, so follow-ups such as “only ShareView,” “compare that with the
 previous month,” and “show the sessions behind that finding” retain scope.

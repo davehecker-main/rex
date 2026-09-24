@@ -151,3 +151,13 @@ test('calendar bounds follow daylight saving changes', () => {
     from: '2026-03-08T08:00:00.000Z', to: '2026-03-09T07:00:00.000Z',
   });
 });
+
+test('worked-example request asks for discovered source inventory since installation', () => {
+  const request = 'Write me a report of my usage since you were installed recently. The purpose of the report is not just to inform about usage, but to demonstrate every data type that is available to rex, not limited to the rex-generated logging. I am interested in efficiency, interruptions, permissions, token use, use of multi agents, limiting bloat, and other data that is aligned.';
+  const resolved = resolveReportQuery(request, context);
+  assert.equal(resolved.status, 'resolved');
+  assert.equal(resolved.query.kind, 'source-inventory');
+  assert.equal(resolved.query.history, 'since-installed');
+  assert.equal(resolved.query.period, null);
+  assert.deepEqual(resolved.query.projects, []);
+});

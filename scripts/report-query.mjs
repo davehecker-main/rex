@@ -72,11 +72,11 @@ function previousPeriod(query, timeZone) {
   return { from: new Date(Date.parse(from) - duration).toISOString(), to: from };
 }
 
-function detectProjects(text, projects, previous) {
+function detectProjects(text, projects, previous, sourceRequest = false) {
   if (/\b(?:every|all) projects\b/i.test(text)) return { value: [] };
   const matches = projects.filter(({ name, key }) => {
-    if (/^rex$/i.test(name) && /\bRex\s+recommended\b/i.test(text) &&
-      !/\b(?:only|for|in|from)\s+Rex\b/i.test(text)) return false;
+    if (/^rex$/i.test(name) && (sourceRequest || /\bRex\s+recommended\b/i.test(text)) &&
+      !/\b(?:only|in|from)\s+Rex\b|\bRex\s+project\b/i.test(text)) return false;
     return [name, key].some((label) => new RegExp(`(^|[^\\w])${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^\\w]|$)`, 'i').test(text));
   });
   if (matches.length) return { value: matches.map(({ key }) => key) };
@@ -124,16 +124,18 @@ export function resolveReportQuery(request, {
 } = {}) {
   if (typeof request !== 'string' || !request.trim()) return clarification('What would you like Rex to report?');
   const text = request.trim();
-  const recognized = /\b(?:use|show|usage|tokens?|cost|spend|habits?|behavior|time sinks?|wasting time|interruptions?|recommend(?:ed|ations?)?|interventions?|changes rex|compare|versus|sessions?|evidence|browser|terminal|report|history|metrics|analy[sz]e|inspect|review)\b/i.test(text);
+  const recognized = /\b(?:use|show|usage|tokens?|cost|spend|habits?|behavior|time sinks?|wasting time|interruptions?|recommend(?:ed|ations?)?|interventions?|changes rex|compare|versus|sessions?|evidence|browser|terminal|report|history|metrics|sources?|inventory|analy[sz]e|inspect|review)\b/i.test(text);
   const followUp = /\b(?:only|that|this|it|same|open|show)\b/i.test(text);
   if (!recognized && !/\bhow much did i use\b/i.test(text) && !(previous && followUp)) return clarification('What would you like Rex to report? Please name the subject or the report to refine.');
   const todayParts = localParts(new Date(now), timeZone);
   const today = `${todayParts.year}-${String(todayParts.month).padStart(2, '0')}-${String(todayParts.day).padStart(2, '0')}`;
-  const projectResult = detectProjects(text, projects, previous);
+  const sourceRequest = /\b(?:sources?|inventory)\b|\b(?:every|all)\s+data\s+types?\s+(?:that\s+is\s+)?available\b/i.test(text);
+  const sinceInstalled = sourceRequest && /\bsince\s+(?:(?:you|rex)\s+(?:were|was)\s+)?installed\b/i.test(text);
+  const projectResult = detectProjects(text, projects, previous, sourceRequest);
   if (projectResult.question) return clarification(projectResult.question);
   const modelResult = detectModels(text, models, projects, previous);
   if (modelResult.question) return clarification(modelResult.question);
-  if (/\b(?:sometime|recently|a while ago|around then)\b/i.test(text)) {
+  if (/\b(?:sometime|recently|a while ago|around then)\b/i.test(text) && !sinceInstalled) {
     return clarification('Which date range should I use?');
   }
   const selected = calendarPeriod(text, today, timeZone);
@@ -153,8 +155,8 @@ export function resolveReportQuery(request, {
     return clarification(previous?.findingIds?.length ? `Which finding ID should I show sessions for? ${previous.findingIds.join(', ')}` : 'Which finding should I show sessions for?');
   }
   const comparison = /\b(?:compare|versus|vs\.?|against)\b/i.test(text);
-  const hasNewKind = /\b(?:usage|tokens?|cost|habits?|behavior|time sinks?|wasting time|interruptions?|recommend(?:ed|ations?)?|interventions?|changes rex)\b/i.test(text);
-  const kind = drillDown ? 'sessions' : comparison ? 'comparison' :
+  const hasNewKind = /\b(?:usage|tokens?|cost|habits?|behavior|time sinks?|wasting time|interruptions?|recommend(?:ed|ations?)?|interventions?|changes rex|sources?|inventory)\b/i.test(text);
+  const kind = drillDown ? 'sessions' : sourceRequest ? 'source-inventory' : comparison ? 'comparison' :
     /\b(?:recommend(?:ed|ations?)?|interventions?|changes rex)\b/i.test(text) ? 'intervention' :
     /\b(?:habits?|behavior|time sinks?|wasting time|interruptions?)\b/i.test(text) ? 'behavior' :
     previous && !hasNewKind ? previous.kind : 'usage';
@@ -162,8 +164,8 @@ export function resolveReportQuery(request, {
   const metricsOnly = /\bmetrics[- ]only\b/i.test(text);
   const query = {
     kind,
-    history: selected?.history ?? previous?.history ?? 'all-available',
-    period: selected ? selected.value : previous?.period ?? null,
+    history: sinceInstalled ? 'since-installed' : selected?.history ?? previous?.history ?? 'all-available',
+    period: sinceInstalled ? null : selected ? selected.value : previous?.period ?? null,
     periodUnit: selected?.unit ?? previous?.periodUnit ?? null,
     comparePeriod: null,
     projects: projectResult.value,

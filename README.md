@@ -93,6 +93,7 @@ For a cross-session report, give Rex a natural-language request:
 node scripts/rex-report.mjs "Show all my usage across every project for the last month"
 node scripts/rex-report.mjs "only ShareView"
 node scripts/rex-report.mjs "show the sessions behind that finding"
+node scripts/rex-report.mjs "Show Rex source inventory since installed"
 ```
 
 The on-demand runner opens a private browser report. Its context file carries follow-up
@@ -110,6 +111,13 @@ uses `scripts/rex-report.sh` to prepare a private structured evidence file, cons
 read-only Codex, validate his cited sessions, and then deliver the browser report. If the
 Codex call is unavailable, the measured report still opens and says judgment was unavailable.
 The direct Node command above delivers deterministic metrics without a model consult.
+The source inventory request uses the same browser report path. It discovers available
+Claude, Codex, Rex installation, ShareView memory, and live claim sources; labels events
+and snapshots; and shows each source's rows, coverage gaps, and limits. Its selected
+installation milestone is shown with candidate dates because file mtimes are imperfect
+evidence. Claude and Codex token counts retain their separate provider conventions and
+are never added into a cross-provider total. The report omits prompt text, settings
+values, and secret grant content.
 
 `codex exec` has no `--agent` flag and does not read `~/.codex/agents/`, so `rex-consult.sh`
 extracts the persona from `rex.toml` and puts it in the prompt. The installed `rex.toml` is

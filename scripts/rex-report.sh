@@ -11,7 +11,7 @@ trap 'rm -f "$evidence" "$judgment"' EXIT
 node "$repo_dir/scripts/rex-report.mjs" --request-file "$request" --prepare "$evidence" "$@"
 kind=$(node -e 'const fs=require("fs");console.log(JSON.parse(fs.readFileSync(process.argv[1],"utf8")).query.kind)' "$evidence")
 case "$kind" in
-  behavior|comparison|intervention)
+  behavior|comparison|intervention|source-inventory)
     if "$repo_dir/scripts/rex-report-judge.sh" "$evidence" "$judgment"; then
       if node "$repo_dir/scripts/rex-report.mjs" --request-file "$request" --judgment-file "$judgment" "$@"; then
         exit 0
