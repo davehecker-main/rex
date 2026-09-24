@@ -116,6 +116,10 @@ test('clarifies material ambiguity and unsupported named project', () => {
   assert.equal(resolveReportQuery('Show Claude Opus 5.1 usage', context).status, 'clarification');
   assert.equal(resolveReportQuery('Show Nova-7 usage', context).status, 'clarification');
   assert.equal(resolveReportQuery('Show o3 usage', context).status, 'clarification');
+  assert.equal(resolveReportQuery('Show Titan usage', context).status, 'clarification');
+  assert.equal(resolveReportQuery('Show Claude Mythos usage', context).status, 'clarification');
+  assert.equal(resolveReportQuery('show titan tokens', context).status, 'clarification');
+  assert.deepEqual(resolveReportQuery('Show ShareView usage', context).query.projects, ['-Users-david-Developer-ShareView']);
   assert.deepEqual(resolveReportQuery('Show Claude Opus 5 usage', context).query.models, ['claude-opus-5']);
 });
 

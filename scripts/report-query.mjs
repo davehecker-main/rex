@@ -87,7 +87,7 @@ function detectProjects(text, projects, previous) {
   return { value: previous?.projects ?? [] };
 }
 
-function detectModels(text, models, previous) {
+function detectModels(text, models, projects, previous) {
   const mentionPattern = /\b(?:claude[ .-]?)?(?:opus|sonnet|haiku|fable|gpt|gemini|llama|grok|mistral|qwen|deepseek)(?:[ .-]+\d+(?:[ .-]+\d+)*)?\b/gi;
   const mentions = [...text.matchAll(mentionPattern)]
     .map((match) => match[0]);
@@ -103,6 +103,12 @@ function detectModels(text, models, previous) {
     .replace(/\bfinding\s+(?:rex|metric|content)-[a-z0-9-]+\b/gi, ' ');
   const unfamiliar = remaining.match(/\b(?:[A-Za-z][A-Za-z0-9]*[-.]\d[\w.-]*|[A-Z][A-Za-z]+\s+\d+(?:\.\d+)*|o\d+)\b/i);
   if (unfamiliar) return { question: `Which available model did you mean by “${unfamiliar[0]}”?` };
+  const namedScope = remaining.match(/\b(?:show|report|compare|only|for|of)\s+((?:claude\s+)?[a-z][\w-]*)\s+(?:usage|tokens|cost|spend)\b/i)?.[1];
+  const genericScope = /^(?:my|the|all|every|total|overall|estimated|actual|model|project|session|browser|terminal|daily|monthly|weekly|api)$/i;
+  if (namedScope && !genericScope.test(namedScope) &&
+    !projects.some(({ name, key }) => [name, key].some((label) => label.toLowerCase() === namedScope.toLowerCase()))) {
+    return { question: `Which available model did you mean by “${namedScope}”?` };
+  }
   if (selected.length) return { value: selected };
   if (/\b(?:every|all) models\b/i.test(text)) return { value: [] };
   return { value: previous?.models ?? [] };
@@ -125,7 +131,7 @@ export function resolveReportQuery(request, {
   const today = `${todayParts.year}-${String(todayParts.month).padStart(2, '0')}-${String(todayParts.day).padStart(2, '0')}`;
   const projectResult = detectProjects(text, projects, previous);
   if (projectResult.question) return clarification(projectResult.question);
-  const modelResult = detectModels(text, models, previous);
+  const modelResult = detectModels(text, models, projects, previous);
   if (modelResult.question) return clarification(modelResult.question);
   if (/\b(?:sometime|recently|a while ago|around then)\b/i.test(text)) {
     return clarification('Which date range should I use?');
