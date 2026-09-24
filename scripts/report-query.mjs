@@ -72,14 +72,35 @@ function previousPeriod(query, timeZone) {
   return { from: new Date(Date.parse(from) - duration).toISOString(), to: from };
 }
 
+// Report vocabulary and bare numbers are never project names, whatever a folder is called.
+const notProjectName = /^(?:\d+|sessions?|evidence|findings?|usage|tokens?|cost|report|history|metrics|browser|terminal|this|that|all|every)$/i;
+
+// Each scope dimension is inherited from the previous report unless the request restates it.
+// "All my usage" and "all (available) history" restate the whole scope, so they clear both
+// projects and models; "every project" clears only projects.
+const allScope = /\ball\s+(?:of\s+)?my\s+usage\b|\ball\s+(?:available\s+)?history\b/i;
+const allProjects = /\b(?:every|all|each)\s+(?:of\s+my\s+)?projects?\b/i;
+
+// A Claude worktree dir (<project>--claude-worktrees-<name>) belongs to its parent project.
+export const projectParent = (key) => key.match(/^(.+?)--claude-worktrees-./)?.[1] ?? key;
+export const projectName = (key) => projectParent(key).split('-').filter(Boolean).at(-1) ?? key;
+
 function detectProjects(text, projects, previous, sourceRequest = false) {
-  if (/\b(?:every|all) projects\b/i.test(text)) return { value: [] };
+  text = text.replace(/\bfinding\s+(?:rex|metric|content)-[a-z0-9-]+\b/gi, ' ');
+  // With breadth wording, a name counts only as the explicit object ("for ShareView").
+  const broad = allProjects.test(text) || allScope.test(text);
   const matches = projects.filter(({ name, key }) => {
+    if (notProjectName.test(name)) name = key;
     if (/^rex$/i.test(name) && (sourceRequest || /\bRex\s+recommended\b/i.test(text)) &&
       !/\b(?:only|in|from)\s+Rex\b|\bRex\s+project\b/i.test(text)) return false;
-    return [name, key].some((label) => new RegExp(`(^|[^\\w])${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^\\w]|$)`, 'i').test(text));
+    return [name, key].some((label) => {
+      const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return new RegExp(broad ? `\\b(?:only|for|in|from)\\s+${escaped}([^\\w]|$)|(^|[^\\w])${escaped}\\s+project\\b`
+        : `(^|[^\\w])${escaped}([^\\w]|$)`, 'i').test(text);
+    });
   });
   if (matches.length) return { value: matches.map(({ key }) => key) };
+  if (broad) return { value: [] };
   const named = text.match(/\b(?:only|for|in)\s+([A-Z][\w-]+)\b/);
   if (named && !/^(?:all|every|last|this|usage|tokens|cost|the|my|browser)$/i.test(named[1])) {
     return { question: `Which project did you mean by “${named[1]}”?` };
@@ -110,7 +131,7 @@ function detectModels(text, models, projects, previous) {
     return { question: `Which available model did you mean by “${namedScope}”?` };
   }
   if (selected.length) return { value: selected };
-  if (/\b(?:every|all) models\b/i.test(text)) return { value: [] };
+  if (/\b(?:every|all) models\b/i.test(text) || allScope.test(text)) return { value: [] };
   return { value: previous?.models ?? [] };
 }
 
@@ -133,23 +154,28 @@ export function resolveReportQuery(request, {
   // "since installed" names the window on its own; it does not require source-inventory
   // wording to also be present (a plain "report since you were installed" still means that).
   const sinceInstalled = /\bsince\s+(?:(?:you|rex)\s+(?:were|was)\s+)?installed\b/i.test(text);
-  const projectResult = detectProjects(text, projects, previous, sourceRequest);
+  const drillDown = /\b(?:sessions?|evidence)\s+behind\s+(?:(?:that|this)\s+finding|finding\s+(?:[a-z0-9-]+))\b/i.test(text);
+  const selected = calendarPeriod(text, today, timeZone);
+  // Content opt-in and a drill-down kind carry forward only when the request refers back to the
+  // previous report ("that", "the same", "only…", "open this"), or is itself a drill-down.
+  const refersBack = drillDown || /^\s*(?:(?:and|now|then)\s+)?only\b|\bthe same\b|\b(?:that|this) report\b|\bhow did (?:that|it) compare\b|\bwhat did (?:that|it) cost\b|\b(?:compare|open|show)\s+(?:that|it|this(?!\s+(?:week|month|year|session)))\b/i.test(text);
+  // A drill-down re-shows the earlier report's finding, so it keeps that report's scope as-is.
+  const projectResult = drillDown ? { value: previous?.projects ?? [] } :
+    detectProjects(text, projects, previous, sourceRequest);
   if (projectResult.question) return clarification(projectResult.question);
-  const modelResult = detectModels(text, models, projects, previous);
+  const modelResult = drillDown ? { value: previous?.models ?? [] } : detectModels(text, models, projects, previous);
   if (modelResult.question) return clarification(modelResult.question);
   if (/\b(?:sometime|recently|a while ago|around then)\b/i.test(text) && !sinceInstalled) {
     return clarification('Which date range should I use?');
   }
-  const selected = calendarPeriod(text, today, timeZone);
   const weekPair = /\bthis week\b.*\b(?:last|previous) week\b/i.test(text);
   const previousComparison = /\b(?:compare|versus|vs\.?|against)\b/i.test(text) &&
-    /\b(?:previous|last) month\b/i.test(text) && /\b(?:that|it|this report)\b/i.test(text);
+    /\b(?:previous|last) month\b/i.test(text) && /\b(?:that|it|this report)\b/i.test(text) && previous;
   const reference = /\b(?:that|it|this report|that finding)\b/i.test(text);
   if (reference && !previous && (previousComparison || /\b(?:show|open|compare)\b/i.test(text))) {
     return clarification('Which earlier report should I use?');
   }
   const explicitFindingId = text.match(/\bfinding\s+((?:rex|metric|content)-[a-z0-9-]+|coverage)\b/i)?.[1] ?? null;
-  const drillDown = /\b(?:sessions?|evidence)\s+behind\s+(?:(?:that|this)\s+finding|finding\s+(?:[a-z0-9-]+))\b/i.test(text);
   if (drillDown && explicitFindingId && previous?.findingIds && !previous.findingIds.includes(explicitFindingId)) {
     return clarification(`I cannot find ${explicitFindingId} in the earlier report. Which finding ID should I use?`);
   }
@@ -161,7 +187,7 @@ export function resolveReportQuery(request, {
   const kind = drillDown ? 'sessions' : sourceRequest ? 'source-inventory' : comparison ? 'comparison' :
     /\b(?:recommend(?:ed|ations?)?|interventions?|changes rex)\b/i.test(text) ? 'intervention' :
     /\b(?:habits?|behavior|time sinks?|wasting time|interruptions?)\b/i.test(text) ? 'behavior' :
-    previous && !hasNewKind ? previous.kind : 'usage';
+    previous && !hasNewKind && (previous.kind !== 'sessions' || refersBack) ? previous.kind : 'usage';
   const explicitOptIn = /\b(?:analy[sz]e|inspect|review)\s+(?:the\s+)?(?:transcript|session|conversation)\s+content\b|\b(?:deep|semantic)\s+content\s+analysis\b/i.test(text);
   const metricsOnly = /\bmetrics[- ]only\b/i.test(text);
   const query = {
@@ -173,10 +199,10 @@ export function resolveReportQuery(request, {
     projects: projectResult.value,
     models: modelResult.value,
     timeZone,
-    contentAnalysis: metricsOnly ? false : explicitOptIn || previous?.contentAnalysis === true,
+    contentAnalysis: metricsOnly ? false : explicitOptIn || (refersBack && previous?.contentAnalysis === true),
     surface: /\b(?:browser|web page)\b/i.test(text) ? 'browser' : /\b(?:terminal|tui)\b/i.test(text) ? 'terminal' : previous?.surface ?? 'default',
-    findingId: drillDown ? explicitFindingId ?? previous?.findingId ?? null : previous?.findingId ?? null,
-    findingIds: previous?.findingIds ?? [],
+    findingId: drillDown ? explicitFindingId ?? previous?.findingId ?? null : kind === 'sessions' ? previous.findingId ?? null : null,
+    findingIds: kind === 'sessions' || refersBack ? previous?.findingIds ?? [] : [],
     currentSession: /\b(?:current|this) session\b/i.test(text) ||
       (previous?.currentSession === true && !/\b(?:(?:all|every) sessions|all available history|all history)\b/i.test(text)),
   };
@@ -186,7 +212,9 @@ export function resolveReportQuery(request, {
     query.history = previous.history;
     query.period = previous.period;
     query.periodUnit = previous.periodUnit;
-    query.comparePeriod = previousPeriod(previous, timeZone);
+    // "The previous month" of a monthly report is the month before it; otherwise "last month"
+    // is the calendar month.
+    query.comparePeriod = previous.periodUnit === 'month' ? previousPeriod(previous, timeZone) : selected.value;
   } else if (comparison) {
     query.comparePeriod = previousPeriod(query, timeZone);
     if (!query.comparePeriod) return clarification('Which periods should I compare?');

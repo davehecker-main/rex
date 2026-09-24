@@ -1,3 +1,5 @@
+import { projectName } from './report-query.mjs';
+
 const number = (value) => Number.isFinite(value) ? value.toLocaleString('en-US') : 'unknown';
 const money = (value) => Number.isFinite(value) ? `$${value.toFixed(value < .01 ? 4 : 2)}` : 'unknown';
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({
@@ -12,7 +14,7 @@ const metric = (row) => ({
   interruptions: row.interruptions ?? null,
 });
 
-export function buildReportView(report, { compareTo, assessment, query, projectNames = [], findings = [], finding = null, sourceInventory = null } = {}) {
+export function buildReportView(report, { compareTo, assessment, query, findings = [], finding = null, sourceInventory = null } = {}) {
   if (!report?.basis || !report?.summary || !report?.coverage || !report?.groups) {
     throw new TypeError('report requires basis, summary, coverage, and groups');
   }
@@ -33,7 +35,7 @@ export function buildReportView(report, { compareTo, assessment, query, projectN
     scope: { source: basis.source, from: basis.from, toExclusive: basis.toExclusive,
       timezone: 'UTC', calendarTimeZone: query?.timeZone ?? 'UTC',
       sessions: sections[3].rows.length, files: coverage.files ?? 0,
-      projects: query?.projects?.map((key) => projectNames.find((item) => item.key === key)?.name ?? key) ?? [],
+      projects: [...new Set(query?.projects?.map(projectName) ?? [])],
       models: query?.models ?? [], history: query?.history ?? 'all-available',
       interventionPeriod: query?.kind === 'intervention' ? query.period : null,
       behaviorMeaning: basis.behaviorMeaning ?? null },

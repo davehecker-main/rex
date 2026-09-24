@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { collectUsage, rateCard } from './usage-accounting.mjs';
-import { resolveReportQuery } from './report-query.mjs';
+import { resolveReportQuery, projectName, projectParent } from './report-query.mjs';
 import { assessReport } from './report-assessment.mjs';
 import { buildReportView } from './report-view.mjs';
 import { deliverReport } from './report-browser.mjs';
@@ -13,9 +13,9 @@ export function discoverProjects(root) {
   let entries;
   try { entries = readdirSync(join(root, 'projects'), { withFileTypes: true }); }
   catch (error) { if (error.code === 'ENOENT') return []; throw error; }
-  return entries.filter((entry) => entry.isDirectory()).map((entry) => ({
-    key: entry.name, name: entry.name.split('-').filter(Boolean).at(-1) ?? entry.name,
-  }));
+  // A Claude worktree dir takes its parent project's name, so naming the project selects its
+  // worktree transcripts too.
+  return entries.filter((entry) => entry.isDirectory()).map((entry) => ({ key: entry.name, name: projectName(entry.name) }));
 }
 
 function interventions(path) {
@@ -123,6 +123,12 @@ export function runReportRequest(request, {
       now, timeZone, projects, models: Object.keys(rateCard.models) });
   if (queryResult.status !== 'resolved') return queryResult;
   const query = queryResult.query;
+  // A drill-down shows the sessions the earlier report cited, as recorded in its context,
+  // rather than re-deriving findings from a report whose scope may differ. Contexts written
+  // before findings were recorded, a structured query, or a finding not stored (coverage) fall
+  // back to re-deriving findings from the collected report.
+  const stored = query.kind === 'sessions' && Array.isArray(previous?.findings) ? previous.findings : null;
+  const cited = stored?.find((entry) => entry.id === query.findingId) ?? null;
   if (query.currentSession && !process.env.CLAUDE_CODE_SESSION_ID) {
     return { status: 'clarification', question: 'Which session should I report? The host did not provide a current Claude session ID.' };
   }
@@ -133,7 +139,7 @@ export function runReportRequest(request, {
   }) : null;
   const options = { root, from: sourceInventory?.window.from ?? query.period?.from, to: query.period?.to,
     projects: query.projects, models: query.models,
-    session: query.currentSession ? process.env.CLAUDE_CODE_SESSION_ID : undefined };
+    session: query.currentSession ? process.env.CLAUDE_CODE_SESSION_ID : undefined, sessions: cited?.sessions };
   let report = collectUsage(options);
   let baseline = query.comparePeriod ? collectUsage({ ...options,
     from: query.comparePeriod.from, to: query.comparePeriod.to }) : null;
@@ -150,11 +156,21 @@ export function runReportRequest(request, {
   const contentEvidence = query.contentAnalysis ? (semanticEvidence.length ? semanticEvidence :
     collectSemanticEvidence({ root, from: options.from, to: options.to,
       projects: query.projects, session: options.session })) : [];
+  // Compare parent projects (each with its worktree dirs). Two dirs of one parent compare as-is,
+  // unless they are that whole project (a main dir plus its only worktree).
+  const parents = [...new Set(query.projects.map(projectParent))];
+  const wholeProject = parents.length === 1 &&
+    projects.filter(({ key }) => projectParent(key) === parents[0]).length === query.projects.length;
+  const groups = query.kind !== 'comparison' ? null : parents.length === 2
+    ? parents.map((parent) => query.projects.filter((key) => projectParent(key) === parent))
+    : query.projects.length === 2 && !wholeProject ? query.projects.map((key) => [key]) : null;
+  const names = groups?.map((keys) => projectName(keys[0]));
   const assessment = assessReport(report, { baseline,
-    projectComparison: query.kind === 'comparison' && query.projects.length === 2 ? query.projects : undefined,
+    projectComparison: groups?.map((keys, i) => ({ keys,
+      label: names[0] !== names[1] ? names[i] : parents.length === 2 ? parents[i] : keys[0] })),
     interventions: logged,
     contentAnalysis: query.contentAnalysis, semanticEvidence: contentEvidence });
-  const effectiveJudgment = judgment ?? (query.kind === 'sessions' ? previous?.judgment : null);
+  const effectiveJudgment = judgment ?? (query.kind === 'sessions' && !cited ? previous?.judgment : null);
   if (effectiveJudgment) {
     const references = query.contentAnalysis ? collectContentReferences({ root, from: options.from,
       to: options.to, projects: query.projects, session: options.session }) : new Set();
@@ -163,16 +179,22 @@ export function runReportRequest(request, {
       assessment.contentAnalysis.status = 'supported';
     }
   }
-  const reportFindings = findings(report, assessment);
-  const selectedFinding = query.kind === 'sessions'
-    ? reportFindings.find((entry) => entry.id === query.findingId) : null;
+  const reportFindings = cited ? [cited] : findings(report, assessment);
+  const selectedFinding = cited ?? (query.kind === 'sessions'
+    ? reportFindings.find((entry) => entry.id === query.findingId) : null);
   const view = buildReportView(report, { compareTo: baseline, assessment,
-    query, projectNames: projects, findings: reportFindings, finding: selectedFinding,
+    query, findings: reportFindings, finding: selectedFinding,
     sourceInventory });
   const delivery = deliver ? deliverReport(view, { preference: query.surface === 'default' ? undefined : query.surface,
     terminalSupported, outputDir, openBrowser, writeTerminal }) : null;
-  const context = { query: { ...query, findingIds: reportFindings.map((entry) => entry.id),
-    findingId: reportFindings.length === 1 ? reportFindings[0].id : query.kind === 'sessions' ? query.findingId : null },
-    reportPath: delivery?.path ?? null, judgment: assessment.rexJudgment ?? null };
+  // After a drill-down the context keeps the original report's findings and judgment, so a
+  // later drill-down can select another of them. The coverage finding cites every session, so
+  // it is not stored; a drill-down on it re-derives it.
+  const kept = stored ?? reportFindings;
+  const findingIds = stored ? previous.query?.findingIds ?? stored.map((entry) => entry.id) : reportFindings.map((entry) => entry.id);
+  const context = { query: { ...query, findingIds,
+    findingId: query.kind === 'sessions' ? query.findingId : findingIds.length === 1 ? findingIds[0] : null },
+    findings: kept.filter((entry) => entry.id !== 'coverage'), reportPath: delivery?.path ?? null,
+    judgment: stored ? previous.judgment ?? null : assessment.rexJudgment ?? null };
   return { status: deliver ? 'delivered' : 'prepared', query, report, baseline, assessment, view, delivery, context };
 }

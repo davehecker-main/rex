@@ -1,16 +1,19 @@
 const measuredFields = ['requests', 'humanTurns', 'assistantTurns', 'toolCalls', 'interruptions', 'assistantProseCharacters'];
 const gapFields = ['unreadableFiles', 'malformedLines', 'rowsWithoutUsage', 'undatedRows'];
 
+// A project is one dir key, or a list of keys (a named project with its worktree dirs).
+const inProject = (request, project) => project === undefined || [project].flat().includes(request.project);
+
 function sessionIds(report, project) {
   const withRequests = (report.requests ?? [])
-    .filter((request) => project === undefined || request.project === project)
+    .filter((request) => inProject(request, project))
     .map((request) => request.session);
   const sessionRows = project === undefined ? (report.groups?.bySession ?? []).map((entry) => entry.key) : [];
   return [...new Set([...withRequests, ...sessionRows])].sort();
 }
 
 function measurements(report, project) {
-  const requests = (report.requests ?? []).filter((request) => project === undefined || request.project === project);
+  const requests = (report.requests ?? []).filter((request) => inProject(request, project));
   const sessions = sessionIds(report, project);
   const sessionSet = new Set(sessions);
   const bySession = (report.groups?.bySession ?? []).filter((entry) => sessionSet.has(entry.key));
@@ -117,9 +120,9 @@ export function assessReport(report, {
     baseline: [baseline.basis?.from ?? null, baseline.basis?.toExclusive ?? null],
   }));
   if (projectComparison?.length === 2) {
-    const [first, second] = projectComparison;
-    comparisons.push(comparison('project', { report, project: first }, { report, project: second },
-      { current: first, baseline: second }));
+    const [first, second] = projectComparison.map((item) => typeof item === 'string' ? { label: item, keys: item } : item);
+    comparisons.push(comparison('project', { report, project: first.keys }, { report, project: second.keys },
+      { current: first.label, baseline: second.label }));
   }
   const currentMetrics = measurements(report);
   const health = !currentMetrics.sessions.length || hasGaps(report)

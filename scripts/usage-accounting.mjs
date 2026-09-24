@@ -30,6 +30,12 @@ const pricedFields = ['input', 'output', 'cacheWrite5m', 'cacheWrite1h', 'cacheR
 const tokenFields = [...pricedFields, 'cacheWriteUnknown'];
 const emptyTokens = () => Object.fromEntries(tokenFields.map((key) => [key, 0]));
 
+// Dated snapshot IDs (claude-haiku-4-5-20251001) are the rate-card model they snapshot.
+const canonicalModel = (model) => {
+  const undated = typeof model === 'string' ? model.replace(/-\d{8}$/, '') : model;
+  return RATE_CARD.models[undated] ? undated : model;
+};
+
 export function priceUsage(model, usage, context = {}) {
   const rates = RATE_CARD.models[model];
   if (!rates) return { status: 'unknown-model', usd: null };
@@ -98,7 +104,7 @@ function group(requests, key) {
   return [...map.values()].sort((a, b) => String(a.key).localeCompare(String(b.key)));
 }
 
-export function collectUsage({ root = join(homedir(), '.claude'), from, to, project, projects, models, session } = {}) {
+export function collectUsage({ root = join(homedir(), '.claude'), from, to, project, projects, models, session, sessions } = {}) {
   const start = from ? time(from) : null;
   const end = to ? time(to) : null;
   if (from && start === null) throw new Error(`invalid from date: ${from}`);
@@ -106,6 +112,8 @@ export function collectUsage({ root = join(homedir(), '.claude'), from, to, proj
   if (start !== null && end !== null && start >= end) throw new Error('from must precede to');
   const coverage = { files: 0, missingSource: 0, unreadableDirs: 0, unreadableFiles: 0, malformedLines: 0, assistantRows: 0, rowsWithoutUsage: 0, undatedRows: 0, duplicateRows: 0, unpricedRequests: 0, unpricedByReason: {} };
   const byId = new Map();
+  const citedSessions = sessions ? new Set(sessions) : null;
+  const wantedModels = models?.length ? new Set(models.map(canonicalModel)) : null;
   const eventSeen = new Set();
   const eventRows = [];
   let discovered;
@@ -128,25 +136,27 @@ export function collectUsage({ root = join(homedir(), '.claude'), from, to, proj
       let row;
       try { row = JSON.parse(lines[i]); }
       catch { coverage.malformedLines++; continue; }
-      if (session && (row.sessionId ?? rel[1]?.replace(/\.jsonl$/, '')) !== session) continue;
+      const rowSession = row.sessionId ?? rel[1]?.replace(/\.jsonl$/, '');
+      if ((session && rowSession !== session) || (citedSessions && !citedSessions.has(rowSession))) continue;
       const at = time(row.timestamp);
       if (at === null) { if (row.type === 'assistant' || row.type === 'user') coverage.undatedRows++; continue; }
       if ((start !== null && at < start) || (end !== null && at >= end)) continue;
       if (row.type === 'assistant' || row.type === 'user') {
         const eventId = row.uuid ? `${row.sessionId ?? projectName}:${row.uuid}` : `${path}:${i}`;
         if (!eventSeen.has(eventId)) {
-          eventRows.push({ row, session: row.sessionId ?? rel[1]?.replace(/\.jsonl$/, '') ?? 'unknown', project: projectName,
+          eventRows.push({ row, session: rowSession ?? 'unknown', project: projectName,
             date: new Date(at).toISOString().slice(0, 10) });
           eventSeen.add(eventId);
         }
       }
       if (row.type !== 'assistant') continue;
-      if (models?.length && !models.includes(row.message?.model)) continue;
+      const model = canonicalModel(row.message?.model);
+      if (wantedModels && !wantedModels.has(model)) continue;
       coverage.assistantRows++;
       if (!row.message?.usage) { coverage.rowsWithoutUsage++; continue; }
       const id = row.requestId ?? row.message.id ?? (row.uuid ? `${row.sessionId ?? basename(path)}:${row.uuid}` : `${path}:${i}`);
-      const candidate = { id, session: row.sessionId ?? rel[1]?.replace(/\.jsonl$/, '') ?? 'unknown', project: projectName,
-        date: new Date(at).toISOString().slice(0, 10), at, model: row.message.model ?? 'unknown',
+      const candidate = { id, session: rowSession ?? 'unknown', project: projectName,
+        date: new Date(at).toISOString().slice(0, 10), at, model: model ?? 'unknown',
         subagent: rel.includes('subagents') || row.isSidechain === true,
         usage: row.message.usage, score: (row.message.usage.output_tokens ?? 0) };
       if (byId.has(id)) coverage.duplicateRows++;

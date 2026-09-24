@@ -4,7 +4,7 @@ import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, utimesSync, wr
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runReportRequest } from '../scripts/report-runner.mjs';
+import { runReportRequest, discoverProjects } from '../scripts/report-runner.mjs';
 
 const root = mkdtempSync(join(tmpdir(), 'rex-integration-'));
 const claudeRoot = join(root, 'claude');
@@ -370,4 +370,136 @@ test('prepared source evidence gives Rex the discovered source list and the repo
     const context = JSON.parse(readFileSync(join(root, 'state', 'rex', 'report-context.json'), 'utf8'));
     assert.equal(context.judgment.summary, 'Rex interpreted source coverage');
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+function worktreeFixture() {
+  const base = mkdtempSync(join(tmpdir(), 'rex-drill-'));
+  const claude = join(base, 'claude');
+  for (const [project, session] of [['-Users-david-Developer-ShareView', 'session-a'],
+    ['-Users-david-Developer-ShareView--claude-worktrees-wt1', 'session-w'],
+    ['-Users-david-Developer-ShareView--claude-worktrees-wt2', 'session-x'],
+    ['-private-tmp-guard-live-two-sessions', 'session-s'], ['-private-tmp-handoff-issue-1', 'session-1'],
+    ['-Users-david-Developer-Rex', 'session-b']]) {
+    mkdirSync(join(claude, 'projects', project), { recursive: true });
+    writeFileSync(join(claude, 'projects', project, `${session}.jsonl`), JSON.stringify(priceable(`req-${session}`, session)));
+  }
+  mkdirSync(join(base, 'output'));
+  return { base, options: { root: claude, outputDir: join(base, 'output'), now: '2026-09-23T18:00:00Z',
+    timeZone: 'America/Los_Angeles', openBrowser: () => {} } };
+}
+const citing = (id, session) => ({ label: `Finding ${id}`, status: 'metric-observation', sessions: [session],
+  evidence: [{ session, reference: 'metric:toolCalls' }], caveat: 'Metrics only.' });
+
+test('a named project includes its worktree dirs and drill-down shows exactly the cited sessions', () => {
+  const { base, options } = worktreeFixture();
+  try {
+    const judgment = { summary: 'Two sessions stand out', findings: [citing('one', 'session-w'), citing('two', 'session-a')] };
+    const scoped = runReportRequest('Review ShareView habits this week', { ...options, judgment });
+    assert.equal(scoped.view.summary.requests, 3);
+    assert.deepEqual(scoped.view.scope.projects, ['ShareView']);
+    const previous = JSON.parse(JSON.stringify(scoped.context));
+    for (const request of ['show the sessions behind finding rex-1', 'show the evidence behind finding rex-1']) {
+      const drill = runReportRequest(request, { ...options, previous });
+      assert.equal(drill.status, 'delivered', request);
+      assert.deepEqual(drill.view.finding.sessions, ['session-w']);
+      assert.deepEqual(drill.view.sections.find((section) => section.id === 'session').rows.map((row) => row.key), ['session-w']);
+    }
+    const first = runReportRequest('show the sessions behind finding rex-1', { ...options, previous });
+    const second = runReportRequest('show the sessions behind finding rex-2', { ...options, previous: JSON.parse(JSON.stringify(first.context)) });
+    assert.equal(second.status, 'delivered');
+    assert.deepEqual(second.view.finding.sessions, ['session-a']);
+    assert.equal(second.context.judgment.summary, judgment.summary);
+    assert.deepEqual(second.context.query.findingIds, scoped.context.query.findingIds);
+  } finally { rmSync(base, { recursive: true, force: true }); }
+});
+
+test('project comparison groups worktree dirs under their named project', () => {
+  const { base, options } = worktreeFixture();
+  try {
+    const periods = runReportRequest('Compare ShareView this week with last week', options);
+    assert.deepEqual(periods.assessment.comparisons.map((item) => item.dimension), ['period']);
+    const projects = runReportRequest('Compare ShareView and Rex this week with last week', options);
+    const project = projects.assessment.comparisons.find((item) => item.dimension === 'project');
+    const sessions = { [project.labels.current]: project.evidence.currentSessions,
+      [project.labels.baseline]: project.evidence.baselineSessions };
+    assert.deepEqual(sessions, { ShareView: ['session-a', 'session-w', 'session-x'], Rex: ['session-b'] });
+  } finally { rmSync(base, { recursive: true, force: true }); }
+});
+
+test('worktree naming matches only the Claude worktree layout', () => {
+  const base = mkdtempSync(join(tmpdir(), 'rex-names-'));
+  try {
+    for (const key of ['-Users-d--codex-worktrees-1a2b-ShareView', '-Users-d-Developer-my-worktrees-tool',
+      '-Users-d-Developer-ShareView--claude-worktrees-wt1']) mkdirSync(join(base, 'projects', key), { recursive: true });
+    assert.deepEqual(Object.fromEntries(discoverProjects(base).map(({ key, name }) => [key, name])), {
+      '-Users-d--codex-worktrees-1a2b-ShareView': 'ShareView', '-Users-d-Developer-my-worktrees-tool': 'tool',
+      '-Users-d-Developer-ShareView--claude-worktrees-wt1': 'ShareView' });
+  } finally { rmSync(base, { recursive: true, force: true }); }
+});
+
+test('drill-down without stored findings re-derives them from the collected report', () => {
+  try {
+    fixture();
+    const options = { root: claudeRoot, outputDir, now: '2026-09-23T18:00:00Z',
+      timeZone: 'America/Los_Angeles', openBrowser: () => {} };
+    const drill = runReportRequest('show the sessions behind finding coverage', { ...options,
+      queryOverride: { kind: 'sessions', findingId: 'coverage' } });
+    assert.equal(drill.status, 'delivered');
+    assert.equal(drill.view.finding.id, 'coverage');
+    const legacy = runReportRequest('show the sessions behind finding coverage', { ...options,
+      previous: { query: { ...drill.query, kind: 'usage', findingId: null, findingIds: ['coverage'] } } });
+    assert.equal(legacy.status, 'delivered');
+    assert.equal(legacy.view.finding.id, 'coverage');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('project comparison keeps same-basename dirs and two worktrees of one project apart', () => {
+  const base = mkdtempSync(join(tmpdir(), 'rex-compare-'));
+  try {
+    const claude = join(base, 'claude');
+    const keys = ['-Users-a-app', '-Users-b-app', '-Users-a-app--claude-worktrees-one', '-Users-a-app--claude-worktrees-two'];
+    for (const [i, key] of keys.entries()) {
+      mkdirSync(join(claude, 'projects', key), { recursive: true });
+      writeFileSync(join(claude, 'projects', key, `s${i}.jsonl`), JSON.stringify(priceable(`r${i}`, `s${i}`)));
+    }
+    const options = { root: claude, deliver: false, now: '2026-09-23T18:00:00Z', timeZone: 'America/Los_Angeles' };
+    const period = { from: '2026-09-21T07:00:00.000Z', to: '2026-09-28T07:00:00.000Z' };
+    const comparePeriod = { from: '2026-09-14T07:00:00.000Z', to: '2026-09-21T07:00:00.000Z' };
+    const compare = (projects) => runReportRequest('Compare these projects this week with last week', { ...options,
+      queryOverride: { kind: 'comparison', projects, period, comparePeriod } }).assessment.comparisons.find((item) => item.dimension === 'project');
+    const basenames = compare(['-Users-a-app', '-Users-a-app--claude-worktrees-one', '-Users-b-app']);
+    assert.deepEqual([basenames.evidence.currentSessions, basenames.evidence.baselineSessions], [['s0', 's2'], ['s1']]);
+    const worktrees = compare(['-Users-a-app--claude-worktrees-one', '-Users-a-app--claude-worktrees-two']);
+    assert.deepEqual([worktrees.evidence.currentSessions, worktrees.evidence.baselineSessions], [['s2'], ['s3']]);
+  } finally { rmSync(base, { recursive: true, force: true }); }
+});
+
+test('context omits the coverage finding sessions and a drill-down on an unstored finding re-derives it', () => {
+  try {
+    fixture();
+    const options = { root: claudeRoot, outputDir, now: '2026-09-23T18:00:00Z',
+      timeZone: 'America/Los_Angeles', openBrowser: () => {} };
+    const first = runReportRequest('Show usage this week', options);
+    assert.ok(first.context.query.findingIds.includes('coverage'));
+    assert.ok(!first.context.findings.some((entry) => entry.id === 'coverage'));
+    const drill = runReportRequest('show the sessions behind finding coverage', { ...options,
+      previous: JSON.parse(JSON.stringify(first.context)) });
+    assert.equal(drill.status, 'delivered');
+    assert.equal(drill.view.finding.id, 'coverage');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('a project with exactly one worktree dir is compared across periods, not main against worktree', () => {
+  const base = mkdtempSync(join(tmpdir(), 'rex-one-worktree-'));
+  try {
+    const claude = join(base, 'claude');
+    for (const [i, key] of ['-Users-d-Developer-ShareView', '-Users-d-Developer-ShareView--claude-worktrees-one'].entries()) {
+      mkdirSync(join(claude, 'projects', key), { recursive: true });
+      writeFileSync(join(claude, 'projects', key, `s${i}.jsonl`), JSON.stringify(priceable(`r${i}`, `s${i}`)));
+    }
+    const result = runReportRequest('Compare ShareView this week with last week', { root: claude, deliver: false,
+      now: '2026-09-23T18:00:00Z', timeZone: 'America/Los_Angeles' });
+    assert.equal(result.query.projects.length, 2);
+    assert.deepEqual(result.assessment.comparisons.map((item) => item.dimension), ['period']);
+  } finally { rmSync(base, { recursive: true, force: true }); }
 });
